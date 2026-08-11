@@ -213,4 +213,12 @@ utils.tSNE_plot(
     FIG_SAVE_VALID=1,
     FIG_SAVE_PATH=FIG_SAVE_PATH)
 
+utils.UMAP_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    FIG_SAVE_VALID=True,
+    FIG_SAVE_PATH=FIG_SAVE_PATH
+)
 plt.show()

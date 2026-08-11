@@ -5,6 +5,7 @@ import pickle
 import torch
 import matplotlib.pyplot as plt
 import itertools
+import umap
 
 from fontTools.unicodedata import block
 from sklearn.metrics import confusion_matrix
@@ -524,7 +525,7 @@ def PCA_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     for i in range(num_classes):
         plt.scatter(X_pca[y_true == i, 0], X_pca[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
     plt.legend()
-    plt.title('PCA of CNN Features')
+    plt.title('PCA')
 
     if FIG_SAVE_VALID:
         plt.savefig(os.path.join(FIG_SAVE_PATH, 'PCA_visualization.png'), dpi=300)
@@ -553,7 +554,49 @@ def tSNE_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     plt.legend()
 
     if FIG_SAVE_VALID:
-        plt.title('t-SNE of CNN Features')
+        plt.title('t-SNE')
         plt.savefig(os.path.join(FIG_SAVE_PATH, 'tSNE_visualization.png'), dpi=300)
+
+    plt.show(block=False)
+
+import umap  # 需要先安装：pip install umap-learn
+
+def UMAP_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
+    """
+    绘制UMAP结果
+
+    :param X_feat: 模型提取的样本特征
+    :param y_true: 样本对应的标签
+    :param num_classes: 数据集中类别种类，在数据预处理中得到
+    :param le: preprocess_data()返回的数据集编码
+    :param FIG_SAVE_VALID: 图片保存使能
+    :param FIG_SAVE_PATH: 图片保存路径
+
+    :return: None
+    """
+    # UMAP 降维
+    reducer = umap.UMAP(
+        n_components=2,
+        n_neighbors=15,
+        min_dist=0.1,
+        random_state=42
+    )
+    X_umap = reducer.fit_transform(X_feat)
+
+    # 绘图
+    plt.figure(figsize=(10, 8))
+    for i in range(num_classes):
+        plt.scatter(
+            X_umap[y_true == i, 0],
+            X_umap[y_true == i, 1],
+            label=le.classes_[i],
+            s=20,
+            alpha=0.7
+        )
+    plt.legend()
+    plt.title('UMAP')  # 可根据模型类型修改标题
+
+    if FIG_SAVE_VALID:
+        plt.savefig(os.path.join(FIG_SAVE_PATH, 'UMAP_visualization.png'), dpi=300)
 
     plt.show(block=False)
