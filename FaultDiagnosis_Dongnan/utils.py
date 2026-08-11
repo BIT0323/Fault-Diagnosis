@@ -5,12 +5,16 @@ import pickle
 import torch
 import matplotlib.pyplot as plt
 import itertools
+
+from fontTools.unicodedata import block
 from sklearn.metrics import confusion_matrix
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.ticker as ticker
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 def load_multi_csv_data(data_folder, visualize_sample, cache_path="gearbox_data_cache.pkl", skip_rows=16):
     """
@@ -112,7 +116,7 @@ def preprocess_data(combined_df, signal_length, Feature_Dimension, TEST_SIZE,
         batch_size: 批量大小
         num_workers: DataLoader的并行工作线程数（Windows下建议设为0）
     返回：
-        train_loader, test_loader, num_classes, label_encoder, scaler
+        train_loader, test_loader, num_classes, label_encoder, le, scaler
     """
     # ===== 2.1 选择特征列 =====
     if Feature_Dimension == 1:
@@ -245,7 +249,7 @@ def plot_confusion_matrix(cm, classes,
             plt.savefig(img_save_path, dpi=500, bbox_inches = 'tight')
 
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
 
 def calculate_multiclass_metrics(cm, verbose, class_names=None):
     """
@@ -399,7 +403,21 @@ def evaluate_model(model, test_loader, device, criterion, epoch=None, num_epochs
     return test_loss, test_acc, y_true, y_pred
 
 def model_train_curve_plot(num_epochs, train_losses, train_accs, test_losses, test_accs,
-                            IMG_SAVE, img_save_path, title='Loss&Accuracy'):
+                            IMG_SAVE_VALID, img_save_path, title='Loss&Accuracy'):
+    """
+    根据训练历史绘制模型训练过程中的 训练集损失曲线、训练集准确度曲线、测试集损失曲线、测试集准确度曲线
+    参数:
+    num_epochs: 超参数，指定的模型训练总轮数
+    train_losses：训练损失历史
+    train_accs：训练准确度历史
+    test_losses：训练测试损失历史
+    test_accs：训练测试准确度历史
+    IMG_SAVE_VALID：图像存储路径使能
+    img_save_path：图像存储路径
+    title：图像标题
+    返回:
+    无
+    """
     # ===== 绘制 Loss 曲线（训练 & 测试） =====
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
@@ -427,11 +445,115 @@ def model_train_curve_plot(num_epochs, train_losses, train_accs, test_losses, te
     ax = plt.gca()  # 获取当前坐标轴
     ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
-    if IMG_SAVE:
+    if IMG_SAVE_VALID:
         if img_save_path:
             filename = f"{title}.png"
             img_save_path = os.path.join(img_save_path, filename)
             plt.savefig(img_save_path, dpi=500, bbox_inches = 'tight')
 
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
+
+def extract_features_CNN(model, data_loader, device):
+    """
+    提取CNN模型特征用于绘制PCA/t-SNE/UMAP
+
+    :param model: 训练好的模型
+    :param data_loader: pytorch的数据加载器
+    :param device: 模型训练硬件，cuda 或者 cpu
+    :return:
+        np.concatenate(features, axis=0): 训练好的模型提取的特征
+        np.concatenate(labels, axis=0): 样本特征所对应的标签
+    """
+    model.eval()
+    features = []
+    labels = []
+    with torch.no_grad():
+        for inputs, lbls in data_loader:
+            inputs = inputs.to(device)
+            # 手动前向传播到fc1
+            x = model.pool1(model.relu1(model.bn1(model.conv1(inputs))))
+            x = model.pool2(model.relu2(model.bn2(model.conv2(x))))
+            x = model.pool3(model.relu3(model.bn3(model.conv3(x))))
+            x = x.view(x.size(0), -1)
+            x = model.relu4(model.fc1(x))  # 特征
+            features.append(x.cpu().numpy())
+            labels.append(lbls.numpy())
+    return np.concatenate(features, axis=0), np.concatenate(labels, axis=0)
+
+def extract_features_RNN(model, data_loader, device):
+    """
+    提取RNN模型特征用于绘制PCA/t-SNE/UMAP
+
+    :param model: 训练好的模型
+    :param data_loader: pytorch的数据加载器
+    :param device: 模型训练硬件，cuda 或者 cpu
+    :return:
+        np.concatenate(features, axis=0): 训练好的模型提取的特征
+        np.concatenate(labels, axis=0): 样本特征所对应的标签
+    """
+    model.eval()
+    features = []
+    labels = []
+    with torch.no_grad():
+        for inputs, lbls in data_loader:
+            inputs = inputs.to(device)
+            feat = model.forward_features(inputs)
+            features.append(feat.cpu().numpy())
+            labels.append(lbls.numpy())
+    return np.concatenate(features, axis=0), np.concatenate(labels, axis=0)
+
+def PCA_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
+    """
+    绘制PCA结果
+
+    :param X_feat: 模型提取的样本特征
+    :param y_true: 样本对应的标签
+    :param num_classes: 数据集中类别种类，在数据预处理中得到
+    :param device: 训练硬件，cuda或cpu
+    :param le: preprocess_data()返回的数据集编码
+    :param FIG_SAVE_VALID: 图片保存使能
+    :param FIG_SAVE_PATH: 图片保存路径
+
+    :return: None
+    """
+    # PCA
+    pca = PCA(n_components=2, random_state=42)
+    X_pca = pca.fit_transform(X_feat)
+    plt.figure(figsize=(10, 8))
+    for i in range(num_classes):
+        plt.scatter(X_pca[y_true == i, 0], X_pca[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
+    plt.legend()
+    plt.title('PCA of CNN Features')
+
+    if FIG_SAVE_VALID:
+        plt.savefig(os.path.join(FIG_SAVE_PATH, 'PCA_visualization.png'), dpi=300)
+
+    plt.show(block=False)
+
+def tSNE_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
+    """
+    绘制t-SNE结果
+
+    :param X_feat: 模型提取的样本特征
+    :param y_true: 样本对应的标签
+    :param num_classes: 数据集中类别种类，在数据预处理中得到
+    :param device: 训练硬件，cuda或cpu
+    :param le: preprocess_data()返回的数据集编码
+    :param FIG_SAVE_VALID: 图片保存使能
+    :param FIG_SAVE_PATH: 图片保存路径
+
+    :return: None
+    """
+    tsne = TSNE(n_components=2, perplexity=30, random_state=42)
+    X_tsne = tsne.fit_transform(X_feat)
+    plt.figure(figsize=(10, 8))
+    for i in range(num_classes):
+        plt.scatter(X_tsne[y_true == i, 0], X_tsne[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
+    plt.legend()
+
+    if FIG_SAVE_VALID:
+        plt.title('t-SNE of CNN Features')
+        plt.savefig(os.path.join(FIG_SAVE_PATH, 'tSNE_visualization.png'), dpi=300)
+
+    plt.show(block=False)
