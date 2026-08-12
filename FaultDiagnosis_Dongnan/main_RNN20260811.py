@@ -213,27 +213,31 @@ else:
 # ========== 提取特征并进行降维可视化 ==========
 X_feat, y_feat = extract_features_RNN(model, test_loader, device)
 
+#绘制PCA
 utils.PCA_plot(
     X_feat=X_feat,
     y_true=y_true,
     num_classes=num_classes,
     le=le,
+    title=f"PCA_FD{Feature_Dimension}_RS20",
     FIG_SAVE_VALID=1,
     FIG_SAVE_PATH=FIG_SAVE_PATH)
-
+# 绘制t-SNE
 utils.tSNE_plot(
     X_feat=X_feat,
     y_true=y_true,
     num_classes=num_classes,
     le=le,
+    title=f"t-SNE_FD{Feature_Dimension}_RS20",
     FIG_SAVE_VALID=1,
     FIG_SAVE_PATH=FIG_SAVE_PATH)
-
+# 绘制UMAP
 utils.UMAP_plot(
     X_feat=X_feat,
     y_true=y_true,
     num_classes=num_classes,
     le=le,
+    title=f"UMAP_FD{Feature_Dimension}_RS20",
     FIG_SAVE_VALID=True,
     FIG_SAVE_PATH=FIG_SAVE_PATH
 )

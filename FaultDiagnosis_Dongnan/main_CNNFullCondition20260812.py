@@ -13,17 +13,16 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import os
-from torch.utils.data import DataLoader
 import utils  # 确保你的utils.py包含所有自定义函数
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
-
+import pandas as pd
 
 # ============================= 配置全局参数 =============================
 DATA_FOLDER = r"D:\PythonProject\Dataset\Mechanical-datasets-master\gearbox\gearset"
 MODEL_SAVEDIT_PATH = r"D:\PythonProject\NeuralNetwork\FaultDiagnosis_Dongnan"
 IMG_SAVE_PATH = os.path.join(MODEL_SAVEDIT_PATH, "ImageSave")
-FIG_SAVE_PATH = os.path.join(IMG_SAVE_PATH, "Figure_CNN")
+FIG_SAVE_PATH = os.path.join(IMG_SAVE_PATH, "Figure_CNN_FullCondition")
 
 os.makedirs(IMG_SAVE_PATH, exist_ok=True)
 os.makedirs(FIG_SAVE_PATH, exist_ok=True)
@@ -43,18 +42,27 @@ patience = 10           # 早停容忍的epoch数
 Feature_Dimension = 3  # 输入通道数（三轴振动）
 EarlyStopValid = 1 # 是否早停：1-早停；0-不早停
 
-# ========== 数据加载 ==========
-data_path = os.path.join(DATA_FOLDER, "RS20_L0")
-dataset_gearbox = utils.load_multi_csv_data(data_path, cache_path="gearbox_data_cacheRS20.pkl",visualize_sample=False)
+# ============================完整数据集加载+统一标签+拼接==========================================
+# 1. 分别加载两个工况的数据
+df_20 = utils.load_multi_csv_data(os.path.join(DATA_FOLDER, "RS20_L0"), cache_path="gearbox_data_cacheRS20.pkl", visualize_sample=True)
+df_30 = utils.load_multi_csv_data(os.path.join(DATA_FOLDER, "RS30_L2"), cache_path="gearbox_data_cache_RS30.pkl", visualize_sample=True)
+
+df_20['fault_type'] = df_20['fault_type'].apply(utils.unify_label)
+df_30['fault_type'] = df_30['fault_type'].apply(utils.unify_label)
+
+# 3. 拼接 DataFrame
+combined_df = pd.concat([df_20, df_30], ignore_index=True)
+print(combined_df.head())
+
+# 4. 统一预处理（此时 LabelEncoder 看到的是一致且完整的标签集合）
 train_loader, test_loader, num_classes, le, scaler = utils.preprocess_data(
-    dataset_gearbox,
+    combined_df,
     signal_length=512,
     Feature_Dimension=Feature_Dimension,
     TEST_SIZE=0.2,
     RANDOM_SEED=RANDOM_SEED,
     batch_size=batch_size
 )
-print(f"类别数: {num_classes}, 类别映射: {dict(zip(le.classes_, range(num_classes)))}")
 
 # ========== 定义CNN模型（带Dropout） ==========
 class SimpleCNN(nn.Module):
@@ -98,7 +106,7 @@ optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
 # ========== 训练或加载已有模型 ==========
-model_path = os.path.join(MODEL_SAVEDIT_PATH, "SimpleCNN_FaultDiagnosisCNNFD320260811n.pth")
+model_path = os.path.join(MODEL_SAVEDIT_PATH, "SimpleCNN_FullCondition20260812.pth")
 
 train_losses, train_accs = [], []
 test_losses, test_accs = [], []
@@ -166,33 +174,17 @@ model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
 print(f"加载最佳模型进行测试: {model_path}")
 
-# # 变负载交叉验证(可选)
-# data_path = os.path.join(DATA_FOLDER, "RS30_L2")
-# dataset_gearboxRS30_L2 = utils.load_multi_csv_data(data_path, cache_path='gearbox_data_cache_RS30.pkl', visualize_sample=False)
-# train_loaderRS30, test_loaderRS30, num_classesRS30, leRS30, scalerRS30 = utils.preprocess_data(
-#     dataset_gearboxRS30_L2,
-#     signal_length=512,
-#     Feature_Dimension=Feature_Dimension,
-#     TEST_SIZE=0.2,
-#     RANDOM_SEED=RANDOM_SEED,
-#     batch_size=batch_size
-# )
-# train_loader, test_loader, num_classes, le, scaler = train_loaderRS30, test_loaderRS30, num_classesRS30, leRS30, scalerRS30
-
-# ========== 最终测试 ==========
+# ========== 全工况数据集测试 ==========
 test_loss, test_acc, y_true, y_pre = utils.evaluate_model(
     model, test_loader, device, criterion, verbose=True
 )
-# test_loss, test_acc, y_true, y_pre = utils.evaluate_model(
-#     model, test_loader, device, criterion, verbose=True
-# )
 print(f"最终测试准确率: {test_acc:.2f}%")
 
 # ========== 混淆矩阵与指标 ==========
 cm = confusion_matrix(y_true, y_pre, labels=range(num_classes))
 utils.plot_confusion_matrix(
     cm, classes=le.classes_, normalize=False,
-    title=f"Confusion_Matrix_FD{Feature_Dimension}",
+    title=f"Confusion_Matrix_FD{Feature_Dimension}_FullCondition",
     IMG_SAVE=True, img_save_path=FIG_SAVE_PATH
 )
 metrics = utils.calculate_multiclass_metrics(cm, verbose=True, class_names=le.classes_)
@@ -207,9 +199,118 @@ if train_losses and test_losses:
         test_accs=test_accs,
         IMG_SAVE_VALID=True,
         img_save_path=FIG_SAVE_PATH,
-        title=f"Loss&Accuracy_FD{Feature_Dimension}")
+        title=f"Loss&Accuracy_FD{Feature_Dimension}_FullCondition")
 else:
     print("本次直接加载已有模型，跳过训练曲线绘制。")
+
+# 特征提取
+X_feat, y_true = utils.extract_features_CNN(model=model, data_loader=test_loader, device=device)
+#绘制PCA
+utils.PCA_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    title=f"PCA_FD{Feature_Dimension}_FullCondition",
+    FIG_SAVE_VALID=1,
+    FIG_SAVE_PATH=FIG_SAVE_PATH)
+# 绘制t-SNE
+utils.tSNE_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    title=f"t-SNE_FD{Feature_Dimension}_FullCondition",
+    FIG_SAVE_VALID=1,
+    FIG_SAVE_PATH=FIG_SAVE_PATH)
+# 绘制UMAP
+utils.UMAP_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    title=f"UMAP_FD{Feature_Dimension}_FullCondition",
+    FIG_SAVE_VALID=True,
+    FIG_SAVE_PATH=FIG_SAVE_PATH
+)
+
+# ===========================================变负载交叉验证(可选)=================================================================
+train_loaderRS30, test_loaderRS30, num_classesRS30, leRS30, scalerRS30 = utils.preprocess_data(
+    df_30,
+    signal_length=512,
+    Feature_Dimension=Feature_Dimension,
+    TEST_SIZE=0.2,
+    RANDOM_SEED=RANDOM_SEED,
+    batch_size=batch_size
+)
+train_loader, test_loader, num_classes, le, scaler = train_loaderRS30, test_loaderRS30, num_classesRS30, leRS30, scalerRS30
+test_loss, test_acc, y_true, y_pre = utils.evaluate_model(
+    model, test_loader, device, criterion, verbose=True)
+print(f"最终测试准确率: {test_acc:.2f}%")
+
+# ========== 混淆矩阵与指标 ==========
+cm = confusion_matrix(y_true, y_pre, labels=range(num_classes))
+utils.plot_confusion_matrix(
+    cm, classes=le.classes_, normalize=False,
+    title=f"Confusion_Matrix_FD{Feature_Dimension}_RS30",
+    IMG_SAVE=True, img_save_path=FIG_SAVE_PATH
+)
+metrics = utils.calculate_multiclass_metrics(cm, verbose=True, class_names=le.classes_)
+
+# 特征提取
+X_feat, y_true = utils.extract_features_CNN(model=model, data_loader=test_loader, device=device)
+#绘制PCA
+utils.PCA_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    title=f"PCA_FD{Feature_Dimension}_RS30",
+    FIG_SAVE_VALID=1,
+    FIG_SAVE_PATH=FIG_SAVE_PATH)
+# 绘制t-SNE
+utils.tSNE_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    title=f"t-SNE_FD{Feature_Dimension}_RS30",
+    FIG_SAVE_VALID=1,
+    FIG_SAVE_PATH=FIG_SAVE_PATH)
+# 绘制UMAP
+utils.UMAP_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=le,
+    title=f"UMAP_FD{Feature_Dimension}_RS30",
+    FIG_SAVE_VALID=True,
+    FIG_SAVE_PATH=FIG_SAVE_PATH
+)
+
+# =========================================
+train_loaderRS20, test_loaderRS20, num_classesRS20, leRS20, scalerRS20 = utils.preprocess_data(
+    df_20,
+    signal_length=512,
+    Feature_Dimension=Feature_Dimension,
+    TEST_SIZE=0.2,
+    RANDOM_SEED=RANDOM_SEED,
+    batch_size=batch_size
+)
+train_loader, test_loader, num_classes, le, scaler = train_loaderRS20, test_loaderRS20, num_classesRS20, leRS20, scalerRS20
+test_loss, test_acc, y_true, y_pre = utils.evaluate_model(
+    model, test_loader, device, criterion, verbose=True
+)
+print(f"最终测试准确率: {test_acc:.2f}%")
+
+# ========== 混淆矩阵与指标 ==========
+cm = confusion_matrix(y_true, y_pre, labels=range(num_classes))
+utils.plot_confusion_matrix(
+    cm, classes=le.classes_, normalize=False,
+    title=f"Confusion_Matrix_FD{Feature_Dimension}_RS20",
+    IMG_SAVE=True, img_save_path=FIG_SAVE_PATH
+)
+metrics = utils.calculate_multiclass_metrics(cm, verbose=True, class_names=le.classes_)
 
 # 特征提取
 X_feat, y_true = utils.extract_features_CNN(model=model, data_loader=test_loader, device=device)
@@ -241,4 +342,5 @@ utils.UMAP_plot(
     FIG_SAVE_VALID=True,
     FIG_SAVE_PATH=FIG_SAVE_PATH
 )
+
 plt.show()

@@ -206,7 +206,7 @@ def plot_confusion_matrix(cm, classes,
     img_save_path: 保存图片路径
     normalize : 是否归一化（显示百分比）
     title : 图表标题
-    cmap : 颜色映射
+    cmap : 颜色映射,可选Blues, Reds...
     """
     if normalize:
         cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
@@ -504,7 +504,7 @@ def extract_features_RNN(model, data_loader, device):
             labels.append(lbls.numpy())
     return np.concatenate(features, axis=0), np.concatenate(labels, axis=0)
 
-def PCA_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
+def PCA_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH):
     """
     绘制PCA结果
 
@@ -513,6 +513,7 @@ def PCA_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     :param num_classes: 数据集中类别种类，在数据预处理中得到
     :param device: 训练硬件，cuda或cpu
     :param le: preprocess_data()返回的数据集编码
+    :param title: 图片标题
     :param FIG_SAVE_VALID: 图片保存使能
     :param FIG_SAVE_PATH: 图片保存路径
 
@@ -524,15 +525,20 @@ def PCA_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     plt.figure(figsize=(10, 8))
     for i in range(num_classes):
         plt.scatter(X_pca[y_true == i, 0], X_pca[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
-    plt.legend()
-    plt.title('PCA')
+    plt.legend(prop={'family': 'Times New Roman', 'size': 16})
+    plt.title(label=title, fontsize=16, fontfamily="Times New Roman")
+    plt.xlabel('Component 1', fontsize=16, fontfamily="Times New Roman")
+    plt.tick_params(axis='both', labelsize=16)
 
     if FIG_SAVE_VALID:
-        plt.savefig(os.path.join(FIG_SAVE_PATH, 'PCA_visualization.png'), dpi=300)
+        if FIG_SAVE_PATH:
+            filename = f"{title}.png"
+            img_save_path = os.path.join(FIG_SAVE_PATH, filename)
+            plt.savefig(img_save_path, dpi=500, bbox_inches='tight')
 
     plt.show(block=False)
 
-def tSNE_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
+def tSNE_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH):
     """
     绘制t-SNE结果
 
@@ -541,6 +547,7 @@ def tSNE_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     :param num_classes: 数据集中类别种类，在数据预处理中得到
     :param device: 训练硬件，cuda或cpu
     :param le: preprocess_data()返回的数据集编码
+    :param title: 图片标题
     :param FIG_SAVE_VALID: 图片保存使能
     :param FIG_SAVE_PATH: 图片保存路径
 
@@ -551,17 +558,21 @@ def tSNE_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     plt.figure(figsize=(10, 8))
     for i in range(num_classes):
         plt.scatter(X_tsne[y_true == i, 0], X_tsne[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
-    plt.legend()
+    plt.legend(prop={'family': 'Times New Roman', 'size': 16})
+    plt.tick_params(axis='both', labelsize=16)
+    plt.title(label=title, fontsize=16, fontfamily="Times New Roman")
 
     if FIG_SAVE_VALID:
-        plt.title('t-SNE')
-        plt.savefig(os.path.join(FIG_SAVE_PATH, 'tSNE_visualization.png'), dpi=300)
+        if FIG_SAVE_PATH:
+            filename = f"{title}.png"
+            img_save_path = os.path.join(FIG_SAVE_PATH, filename)
+            plt.savefig(img_save_path, dpi=500, bbox_inches='tight')
 
     plt.show(block=False)
 
 import umap  # 需要先安装：pip install umap-learn
 
-def UMAP_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
+def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH):
     """
     绘制UMAP结果
 
@@ -569,6 +580,7 @@ def UMAP_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
     :param y_true: 样本对应的标签
     :param num_classes: 数据集中类别种类，在数据预处理中得到
     :param le: preprocess_data()返回的数据集编码
+    :param title: 图片标题
     :param FIG_SAVE_VALID: 图片保存使能
     :param FIG_SAVE_PATH: 图片保存路径
 
@@ -593,10 +605,24 @@ def UMAP_plot(X_feat, y_true, num_classes, le, FIG_SAVE_VALID, FIG_SAVE_PATH):
             s=20,
             alpha=0.7
         )
-    plt.legend()
-    plt.title('UMAP')  # 可根据模型类型修改标题
+    plt.legend(prop={'family': 'Times New Roman', 'size': 16})
+    plt.title(label=title, fontsize=16, fontfamily="Times New Roman")  # 可根据模型类型修改标题
+    plt.tick_params(axis='both', labelsize=16)
 
     if FIG_SAVE_VALID:
-        plt.savefig(os.path.join(FIG_SAVE_PATH, 'UMAP_visualization.png'), dpi=300)
+        if FIG_SAVE_PATH:
+            filename = f"{title}.png"
+            img_save_path = os.path.join(FIG_SAVE_PATH, filename)
+            plt.savefig(img_save_path, dpi=500, bbox_inches='tight')
 
     plt.show(block=False)
+
+def unify_label(label):
+    """
+
+    :param label: 加载的数据集标签
+    :return: 返回统一的去掉工况后缀的标签
+    """
+    # 示例规则：取下划线前的部分，即 'Chipped_20L0' -> 'Chipped'
+    # 根据你实际的命名规则调整
+    return label.split('_')[0] if '_' in label else label
