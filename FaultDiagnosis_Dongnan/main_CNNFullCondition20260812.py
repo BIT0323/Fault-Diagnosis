@@ -1,6 +1,6 @@
 # Copyright Xie Fangyuan, Beijing Institute of technology. All rights reserved
 #
-# ===========================Southeaset University gearbox Dataset introduction===================================
+# ===========================Southeast University gearbox Dataset introduction===================================
 # Gearbox dataset is from Southeast University, China. These data are collected from Drivetrain Dynamic Simulator.
 # This dataset contains 2 subdatasets, including bearing data and gear data, which are both acquired on Drivetrain
 # Dynamics Simulator (DDS). There are two kinds of working conditions with rotating speed - load configuration set
@@ -288,7 +288,7 @@ utils.UMAP_plot(
     FIG_SAVE_PATH=FIG_SAVE_PATH
 )
 
-# =========================================
+# =====================================变负载交叉验证（可选）========================================
 train_loaderRS20, test_loaderRS20, num_classesRS20, leRS20, scalerRS20 = utils.preprocess_data(
     df_20,
     signal_length=512,

@@ -853,16 +853,16 @@ def dataset_file_path_get(DATA_FOLDER, subset):
 
     return file_path
 
-def add_gaussian_noise(signal, snr_db=20, random_state=None):
+def add_gaussian_noise(signal, snr_db=20, RANDOM_SEED=None):
     """
     添加高斯白噪声（信噪比可控）
     :param signal: numpy 数组，形状 (..., length)
     :param snr_db: 信噪比 (dB)，越大噪声越小
-    :param random_state: 随机种子
+    :param RANDOM_SEED: 随机种子
     :return: 加噪后的信号
     """
-    if random_state is not None:
-        np.random.seed(random_state)
+    if RANDOM_SEED is not None:
+        np.random.seed(RANDOM_SEED)
     # 计算信号功率
     signal_power = np.mean(signal ** 2)
     # 根据 SNR 计算噪声功率
@@ -872,17 +872,17 @@ def add_gaussian_noise(signal, snr_db=20, random_state=None):
     noise = np.random.normal(0, np.sqrt(noise_power), signal.shape)
     return signal + noise
 
-def add_impulse_noise(signal, impulse_prob=0.01, amplitude_scale=5.0, random_state=None):
+def add_impulse_noise(signal, impulse_prob=0.01, amplitude_scale=5.0, RANDOM_SEED=None):
     """
     添加随机脉冲噪声（尖峰）
     :param signal: numpy 数组
     :param impulse_prob: 每个时间点产生脉冲的概率
     :param amplitude_scale: 脉冲幅值相对于信号标准差的倍数
-    :param random_state: 随机种子
+    :param RANDOM_SEED: 随机种子
     :return: 加噪信号
     """
-    if random_state is not None:
-        np.random.seed(random_state)
+    if RANDOM_SEED is not None:
+        np.random.seed(RANDOM_SEED)
     # 生成脉冲位置掩码
     mask = np.random.random(signal.shape) < impulse_prob
     # 脉冲幅值：正负随机，幅值为信号标准差的 amplitude_scale 倍
@@ -890,37 +890,52 @@ def add_impulse_noise(signal, impulse_prob=0.01, amplitude_scale=5.0, random_sta
     impulse = mask * impulse_amp
     return signal + impulse
 
-def add_harmonic_interference(signal, freqs=[50, 100, 150], amplitudes=None, fs=1000, random_state=None):
+def add_harmonic_interference(signal, freqs=[50, 100, 150], amp_ratio=0.2, amplitudes=None, fs=5120, RANDOM_SEED=None):
     """
     添加谐波干扰（固定频率正弦波叠加）
+
     :param signal: numpy 数组，形状 (..., length)
     :param freqs: 干扰频率列表 (Hz)
-    :param amplitudes: 各频率的幅值，若为None则根据信号幅值的比例自适应
-    :param fs: 采样频率
-    :param random_state: 随机种子
-    :return: 加噪信号
+    :param amplitudes: 幅值控制，支持三种形式：
+                        - None（默认）：自动根据信号 RMS 生成（每个频率幅值为 RMS × 0.1~0.3 随机）
+                        - 单个数值（int/float）：所有频率使用该相同幅值
+                        - 列表/元组（list/tuple）：长度须与 freqs 一致，按顺序指定每个频率的幅值
+    :param fs: 采样频率（Hz），需与数据集采样率一致
+    :param RANDOM_SEED: 随机种子，若为 None 则每次不同
+    :return: 加噪后的信号（与 signal 形状相同）
     """
-    if random_state is not None:
-        np.random.seed(random_state)
+    if RANDOM_SEED is not None:
+        np.random.seed(RANDOM_SEED)
+
     length = signal.shape[-1]
     t = np.arange(length) / fs
+
+    # ----- 1. 处理 amplitudes 参数 -----
     if amplitudes is None:
-        # 默认每个谐波幅值为信号 RMS 的 0.1~0.3 倍
-        base_amp = np.std(signal) * 0.2
+        # 自动生成：基于信号标准差（或RMS）的 0.1~0.3 倍随机值
+        base_amp = np.std(signal) * amp_ratio
         amplitudes = [base_amp * (0.5 + np.random.rand()) for _ in freqs]
+    elif isinstance(amplitudes, (int, float)):
+        # 单个数值 -> 所有频率使用同一幅值
+        amplitudes = [amplitudes] * len(freqs)
+    elif isinstance(amplitudes, (list, tuple)):
+        # 列表/元组 -> 检查长度是否匹配
+        if len(amplitudes) != len(freqs):
+            raise ValueError(f"amplitudes 长度 ({len(amplitudes)}) 必须与 freqs 长度 ({len(freqs)}) 一致")
+    else:
+        raise TypeError("amplitudes 必须为 None、数值或数值列表/元组")
+
+    # ----- 2. 生成并叠加谐波 -----
     interference = np.zeros_like(signal)
+    # 预计算广播形状，适用于任意维度的信号（最内层为时间轴）
+    broadcast_shape = (1,) * (len(signal.shape) - 1) + (-1,)
+
     for freq, amp in zip(freqs, amplitudes):
-        # 随机初始相位
-        phase = 2 * np.pi * np.random.rand()
+        phase = 2 * np.pi * np.random.rand()  # 随机初始相位
         wave = amp * np.sin(2 * np.pi * freq * t + phase)
-        # 广播到信号形状（假设信号可能是多维，但最内层是时间）
-        interference += wave.reshape((1,)* (len(signal.shape)-1) + (-1,))  # 简单情况保持维度
-    # 更通用的方式：直接将 wave 与 signal 维度对齐
-    # 若 signal 是 (batch, channels, length)，wave 是 (length,)
-    if len(signal.shape) == 3:
-        interference = interference.reshape(1, 1, -1)  # 广播到 batch 和 channels
-    elif len(signal.shape) == 2:
-        interference = interference.reshape(1, -1)
+        # 将 wave 扩展为与 signal 相同维数（广播到 batch/channels 维度）
+        interference += wave.reshape(broadcast_shape)
+
     return signal + interference
 
 def add_noise_combination(signal, noise_type='all', **kwargs):
@@ -945,3 +960,47 @@ def add_noise_combination(signal, noise_type='all', **kwargs):
         return signal
     else:
         return signal
+
+
+def create_noisy_test_loader(test_loader, noise_type='all', random_seed=42,
+                             gaussian_kw=None, impulse_kw=None, harmonic_kw=None):
+    """
+    创建添加固定噪声的测试集 DataLoader
+    :param test_loader: 原始测试集 DataLoader
+    :param noise_type: 噪声类型，可选 'gaussian', 'impulse', 'harmonic', 'all'
+    :param random_seed: 固定随机种子，确保噪声可重现
+    :param gaussian_kw: 高斯噪声参数字典，如 {'snr_db': 20}
+    :param impulse_kw: 脉冲噪声参数字典，如 {'impulse_prob': 0.01, 'amplitude_scale': 4.0}
+    :param harmonic_kw: 谐波干扰参数字典，如 {'freqs': [50,100], 'amp_ratio': 0.2, 'fs': 10000}
+    :return: 带噪测试集 DataLoader
+    """
+    # 固定随机种子
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed)
+
+    noisy_inputs = []
+    noisy_labels = []
+
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs_np = inputs.numpy()  # (batch, channels, length)
+
+            # 调用通用加噪函数
+            inputs_noisy = add_noise_combination(
+                signal=inputs_np,
+                noise_type=noise_type,
+                gaussian_kw=gaussian_kw or {},
+                impulse_kw=impulse_kw or {},
+                harmonic_kw=harmonic_kw or {}
+            )
+            noisy_inputs.append(torch.from_numpy(inputs_noisy).float())
+            noisy_labels.append(labels)
+
+    # 合并所有 batch
+    X_noisy = torch.cat(noisy_inputs, dim=0)
+    y_noisy = torch.cat(noisy_labels, dim=0)
+    noisy_dataset = TensorDataset(X_noisy, y_noisy)
+
+    # 保持原始 batch_size
+    batch_size = test_loader.batch_size
+    return DataLoader(noisy_dataset, batch_size=batch_size, shuffle=False)
