@@ -121,10 +121,9 @@ df_30['fault_type'] = df_30['fault_type'].apply(utils.unify_label)
 
 # 3. 拼接 DataFrame
 combined_df = pd.concat([df_20, df_30], ignore_index=True)
-print(combined_df.head())
 
 # 4. 统一预处理（此时 LabelEncoder 看到的是一致且完整的标签集合）
-train_loader, test_loader, num_classes, le, scaler = utils.preprocess_data(
+train_loader, test_loader, num_classes, le, scaler, cond_train, cond_test= utils.preprocess_data_1(
     combined_df,
     signal_length=512,
     Feature_Dimension=Feature_Dimension,
@@ -317,7 +316,7 @@ print(f"最终测试准确率: {test_acc:.2f}%")
 cm = confusion_matrix(y_true, y_pre, labels=range(num_classes))
 utils.plot_confusion_matrix(
     cm, classes=le.classes_, normalize=False,
-    title=f"Confusion_Matrix_FD{Feature_Dimension}_FullCondition_Noise",
+    title=f"Confusion_Matrix_FD{Feature_Dimension}_Noise_Condition",
     IMG_SAVE=True, img_save_path=FIG_SAVE_PATH
 )
 metrics = utils.calculate_multiclass_metrics(cm, verbose=True, class_names=le.classes_)
@@ -332,7 +331,7 @@ if train_losses and test_losses:
         test_accs=test_accs,
         IMG_SAVE_VALID=True,
         img_save_path=FIG_SAVE_PATH,
-        title=f"Loss&Accuracy_FD{Feature_Dimension}_FullCondition_Noise")
+        title=f"Loss&Accuracy_FD{Feature_Dimension}_Noise")
 else:
     print("本次直接加载已有模型，跳过训练曲线绘制。")
 
@@ -344,26 +343,31 @@ utils.PCA_plot(
     y_true=y_true,
     num_classes=num_classes,
     le=le,
-    title=f"PCA_FD{Feature_Dimension}_FullCondition_Noise",
+    title=f"PCA_FD{Feature_Dimension}_Noise_Condition",
     FIG_SAVE_VALID=1,
-    FIG_SAVE_PATH=FIG_SAVE_PATH)
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+    condition_labels=cond_test
+)
 # 绘制t-SNE
 utils.tSNE_plot(
     X_feat=X_feat,
     y_true=y_true,
     num_classes=num_classes,
     le=le,
-    title=f"t-SNE_FD{Feature_Dimension}_FullCondition_Noise",
+    title=f"t-SNE_FD{Feature_Dimension}_Noise_Condition",
     FIG_SAVE_VALID=1,
-    FIG_SAVE_PATH=FIG_SAVE_PATH)
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+    condition_labels=cond_test
+)
 # 绘制UMAP
 utils.UMAP_plot(
     X_feat=X_feat,
     y_true=y_true,
     num_classes=num_classes,
     le=le,
-    title=f"UMAP_FD{Feature_Dimension}_FullCondition_Noise",
+    title=f"UMAP_FD{Feature_Dimension}_Noise_Condition",
     FIG_SAVE_VALID=True,
-    FIG_SAVE_PATH=FIG_SAVE_PATH
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+    condition_labels=cond_test
 )
 plt.show()

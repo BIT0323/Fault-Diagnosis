@@ -16,21 +16,117 @@ import matplotlib.ticker as ticker
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-def load_multi_csv_data(data_folder, visualize_sample, cache_path="gearbox_data_cache.pkl", skip_rows=16):
+# def load_multi_csv_data(data_folder, visualize_sample, cache_path="gearbox_data_cache.pkl", skip_rows=16):
+#     """
+#     功能描述：用于读取数据库文件夹中的.csv文件
+#     变量：
+#         data_folder:存放.cvs文件的文件夹地址
+#         skip_row:这是由于.cvs文件中的前16行为数据说明行，不含真正数据
+#         cache_path:这是缓存文件地址
+#     return: combined_df：所有.csv文件中提取的数据组成的numpy数组----(numpy.float64格式数组)
+#     """
+#     # 为了避免每次运行程序都从.csv文件读取数据，通过缓存逻辑进行处理
+#     # 检查缓存文件是否存在
+#     if os.path.exists(cache_path):
+#         print(f"发现缓存文件，直接读取（跳过数据加载）...")
+#         with open(cache_path, 'rb') as f:
+#             combined_df = pickle.load(f)
+#         print(f"缓存读取完成，数据量: {len(combined_df)}")
+#         if visualize_sample:
+#             print("前5行数据预览：")
+#             print(combined_df.head())
+#         return combined_df
+#
+#     # 无缓存时，正常加载数据
+#     print("无缓存文件，开始加载数据")
+#     all_data = []
+#     for filename in os.listdir(data_folder):
+#         if not filename.endswith(".csv"):
+#             continue
+#
+#         fault_type = os.path.splitext(filename)[0]
+#         file_path = os.path.join(data_folder, filename)
+#
+#         # 由于该数据集.csv文件中的所有数据都在第一列，所以只读取第一列，并强制以字符串类型读取
+#         df_raw = pd.read_csv(
+#             file_path,
+#             skiprows=skip_rows,
+#             header=None,
+#             usecols=[0],  # 仅读第一列
+#             dtype={0: str},  # 强制第一列为字符串类型
+#             encoding='utf-8',
+#             na_filter=False  # 禁用空值过滤，保留原始字符串
+#         )
+#
+#         # 处理空字符串/无效值，再拆分
+#         # 1. 去除每行首尾空格
+#         df_raw[0] = df_raw[0].str.strip()
+#         # 2. 过滤空行
+#         df_raw = df_raw[df_raw[0] != '']
+#
+#         # 拆分制表符分隔的字符串（兼容已为数值的情况）
+#         try:
+#             # 按制表符拆分，拆分为8列
+#             df_features = df_raw[0].str.split('\t', expand=True)
+#         except:
+#             # 若拆分失败（已为数值），直接转为DataFrame
+#             df_features = pd.DataFrame(df_raw[0].values.reshape(-1, 1))
+#
+#         # 关键修改4：转为数值类型，清理空值，保留前8列
+#         df_features = df_features.iloc[:, :8].apply(pd.to_numeric, errors='coerce')
+#         df_features = df_features.dropna()  # 过滤含空值的行
+#
+#         # 添加故障标签
+#         df_features['fault_type'] = fault_type
+#         all_data.append(df_features)
+#
+#         print(f"已加载 {filename} | 有效数据行: {len(df_features)} | 故障类型: {fault_type}")
+#
+#     # 合并所有数据
+#     combined_df = pd.concat(all_data, ignore_index=True)
+#     # 特征列命名（8个特征）
+#     # feature_cols = [f'feature_{i + 1}' for i in range(8)]
+#     feature_cols = ['vibration_z_motor','vibration_x_pgbox','vibration_y_pgbox',
+#                     'vibration_z_pgbox','torque_motor','vibration_x_gbox',
+#                     'vibration_y_gbox','vibration_z_gbox']
+#     combined_df.columns = feature_cols + ['fault_type']
+#
+#     # 保存缓存文件（二进制格式）
+#     with open(cache_path, 'wb') as f:
+#         pickle.dump(combined_df, f)
+#     print(f"数据加载完成，已保存缓存到: {cache_path}")
+#
+#     if visualize_sample:
+#         print(f"\n合并后总数据量: {len(combined_df)} | 特征维度: 8")
+#         print("前5行数据预览：")
+#         print(combined_df.head())
+#
+#     return combined_df
+
+def load_multi_csv_data(data_folder, visualize_sample=False, cache_path="gearbox_data_cache.pkl", skip_rows=16):
     """
-    功能描述：用于读取数据库文件夹中的.csv文件
+    功能描述：用于读取数据库文件夹中的.csv文件，并自动从文件夹名提取工况标签
+
     变量：
-        data_folder:存放.cvs文件的文件夹地址
-        skip_row:这是由于.cvs文件中的前16行为数据说明行，不含真正数据
-        cache_path:这是缓存文件地址
-    return: combined_df：所有.csv文件中提取的数据组成的numpy数组----(numpy.float64格式数组)
+        data_folder: 存放.csv文件的文件夹地址
+        visualize_sample: 是否打印数据预览
+        cache_path: 缓存文件地址
+        skip_rows: 跳过前几行（默认16）
+
+    return: combined_df：包含所有数据的DataFrame，新增 'condition' 列（工况标识）
     """
-    # 为了避免每次运行程序都从.csv文件读取数据，通过缓存逻辑进行处理
+    # 从文件夹路径提取工况名称（例如 'RS20_L0'）
+    condition_name = os.path.basename(data_folder)  # 获取最后一级目录名
+
     # 检查缓存文件是否存在
     if os.path.exists(cache_path):
         print(f"发现缓存文件，直接读取（跳过数据加载）...")
         with open(cache_path, 'rb') as f:
             combined_df = pickle.load(f)
+        # 如果缓存中没有 condition 列，则补上（兼容旧缓存）
+        if 'condition' not in combined_df.columns:
+            combined_df['condition'] = condition_name
+            print(f"缓存缺少 'condition' 列，已补填为 '{condition_name}'")
         print(f"缓存读取完成，数据量: {len(combined_df)}")
         if visualize_sample:
             print("前5行数据预览：")
@@ -44,54 +140,47 @@ def load_multi_csv_data(data_folder, visualize_sample, cache_path="gearbox_data_
         if not filename.endswith(".csv"):
             continue
 
-        fault_type = os.path.splitext(filename)[0]
+        fault_type = os.path.splitext(filename)[0]  # 例如 'Chipped_20_0'
         file_path = os.path.join(data_folder, filename)
 
-        # 由于该数据集.csv文件中的所有数据都在第一列，所以只读取第一列，并强制以字符串类型读取
         df_raw = pd.read_csv(
             file_path,
             skiprows=skip_rows,
             header=None,
-            usecols=[0],  # 仅读第一列
-            dtype={0: str},  # 强制第一列为字符串类型
+            usecols=[0],
+            dtype={0: str},
             encoding='utf-8',
-            na_filter=False  # 禁用空值过滤，保留原始字符串
+            na_filter=False
         )
 
-        # 处理空字符串/无效值，再拆分
-        # 1. 去除每行首尾空格
         df_raw[0] = df_raw[0].str.strip()
-        # 2. 过滤空行
         df_raw = df_raw[df_raw[0] != '']
 
-        # 拆分制表符分隔的字符串（兼容已为数值的情况）
         try:
-            # 按制表符拆分，拆分为8列
             df_features = df_raw[0].str.split('\t', expand=True)
         except:
-            # 若拆分失败（已为数值），直接转为DataFrame
             df_features = pd.DataFrame(df_raw[0].values.reshape(-1, 1))
 
-        # 关键修改4：转为数值类型，清理空值，保留前8列
         df_features = df_features.iloc[:, :8].apply(pd.to_numeric, errors='coerce')
-        df_features = df_features.dropna()  # 过滤含空值的行
+        df_features = df_features.dropna()
 
         # 添加故障标签
         df_features['fault_type'] = fault_type
+        # 添加工况标签（从文件夹名获取）
+        df_features['condition'] = condition_name
+
         all_data.append(df_features)
+        print(f"已加载 {filename} | 有效数据行: {len(df_features)} | 故障类型: {fault_type} | 工况: {condition_name}")
 
-        print(f"已加载 {filename} | 有效数据行: {len(df_features)} | 故障类型: {fault_type}")
-
-    # 合并所有数据
     combined_df = pd.concat(all_data, ignore_index=True)
-    # 特征列命名（8个特征）
-    # feature_cols = [f'feature_{i + 1}' for i in range(8)]
-    feature_cols = ['vibration_z_motor','vibration_x_pgbox','vibration_y_pgbox',
-                    'vibration_z_pgbox','torque_motor','vibration_x_gbox',
-                    'vibration_y_gbox','vibration_z_gbox']
-    combined_df.columns = feature_cols + ['fault_type']
 
-    # 保存缓存文件（二进制格式）
+    # 特征列命名（8个物理量）
+    feature_cols = ['vibration_z_motor', 'vibration_x_pgbox', 'vibration_y_pgbox',
+                    'vibration_z_pgbox', 'torque_motor', 'vibration_x_gbox',
+                    'vibration_y_gbox', 'vibration_z_gbox']
+    combined_df.columns = feature_cols + ['fault_type', 'condition']  # 新增 condition
+
+    # 保存缓存文件
     with open(cache_path, 'wb') as f:
         pickle.dump(combined_df, f)
     print(f"数据加载完成，已保存缓存到: {cache_path}")
@@ -176,7 +265,7 @@ def preprocess_data(combined_df, signal_length, Feature_Dimension, TEST_SIZE,
     y_train_tensor = torch.tensor(y_train, dtype=torch.long)
     y_test_tensor  = torch.tensor(y_test,  dtype=torch.long)
 
-    print(f"训练集张量形状: {X_train_tensor.shape}")
+    #print(f"训练集张量形状: {X_train_tensor.shape}")
 
     # ===== 2.7 创建 DataLoader =====
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
@@ -190,6 +279,88 @@ def preprocess_data(combined_df, signal_length, Feature_Dimension, TEST_SIZE,
                              pin_memory=True)
 
     return train_loader, test_loader, num_classes, le, scaler
+
+def preprocess_data_1(combined_df, signal_length, Feature_Dimension, TEST_SIZE,
+                    RANDOM_SEED, batch_size, num_workers=0):
+    """
+    返回：train_loader, test_loader, num_classes, le, scaler, cond_train, cond_test
+    """
+    # ===== 选择特征列 =====
+    if Feature_Dimension == 1:
+        feature_cols = ['vibration_x_gbox']
+    elif Feature_Dimension == 3:
+        feature_cols = ['vibration_x_gbox', 'vibration_y_gbox', 'vibration_z_gbox']
+    else:
+        raise ValueError("Feature_Dimension must be 1 or 3")
+
+    # ===== 按 (故障类型, 工况) 分组切分样本 =====
+    X_sequence = []
+    y_sequence = []
+    condition_sequence = []
+
+    # 检查 combined_df 是否有 'condition' 列
+    if 'condition' not in combined_df.columns:
+        raise ValueError("combined_df 必须包含 'condition' 列！")
+
+    grouped = combined_df.groupby(['fault_type', 'condition'])
+    print("检测到的分组:", list(grouped.groups.keys()))  # 调试
+
+    for (fault, cond), group in grouped:
+        signal = group[feature_cols].values
+        num_samples = len(signal) // signal_length
+        for i in range(num_samples):
+            seq = signal[i * signal_length : (i + 1) * signal_length]
+            X_sequence.append(seq)
+            y_sequence.append(fault)
+            condition_sequence.append(cond)
+
+    X = np.array(X_sequence)
+    y = np.array(y_sequence)
+    condition = np.array(condition_sequence)
+
+    print(f"X shape: {X.shape}, y shape: {y.shape}")
+    print(f"工况分布: {np.unique(condition, return_counts=True)}")
+
+    # ===== 标签编码 =====
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    num_classes = len(le.classes_)
+    print(f"故障类型映射: {dict(zip(le.classes_, range(num_classes)))}")
+
+    # ===== 划分数据集（同时划分工况） =====
+    X_train, X_test, y_train, y_test, cond_train, cond_test = train_test_split(
+        X, y_encoded, condition, test_size=TEST_SIZE,
+        random_state=RANDOM_SEED, stratify=y_encoded
+    )
+
+    # ===== 标准化 =====
+    scaler = StandardScaler()
+    X_train_flat = X_train.reshape(-1, X_train.shape[-1])
+    X_train_scaled = scaler.fit_transform(X_train_flat)
+    X_train_scaled = X_train_scaled.reshape(X_train.shape)
+
+    X_test_flat = X_test.reshape(-1, X_test.shape[-1])
+    X_test_scaled = scaler.transform(X_test_flat)
+    X_test_scaled = X_test_scaled.reshape(X_test.shape)
+
+    # ===== 转换为 PyTorch 张量 =====
+    X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32).permute(0, 2, 1)
+    X_test_tensor  = torch.tensor(X_test_scaled,  dtype=torch.float32).permute(0, 2, 1)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.long)
+    y_test_tensor  = torch.tensor(y_test,  dtype=torch.long)
+
+    # ===== 创建 DataLoader =====
+    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+    test_dataset  = TensorDataset(X_test_tensor, y_test_tensor)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size,
+                              shuffle=True, num_workers=num_workers,
+                              pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size,
+                             shuffle=False, num_workers=num_workers,
+                             pin_memory=True)
+
+    return train_loader, test_loader, num_classes, le, scaler, cond_train, cond_test
 
 def plot_confusion_matrix(cm, classes,
                           IMG_SAVE,  img_save_path,
@@ -503,118 +674,217 @@ def extract_features_RNN(model, data_loader, device):
             labels.append(lbls.numpy())
     return np.concatenate(features, axis=0), np.concatenate(labels, axis=0)
 
-def PCA_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH):
+def PCA_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH, condition_labels=None):
     """
-    绘制PCA结果
+    绘制PCA结果，支持可选工况标签
 
-    :param X_feat: 模型提取的样本特征
-    :param y_true: 样本对应的标签
-    :param num_classes: 数据集中类别种类，在数据预处理中得到
-    :param device: 训练硬件，cuda或cpu
-    :param le: preprocess_data()返回的数据集编码
+    :param X_feat: 特征矩阵 (n_samples, feature_dim)
+    :param y_true: 故障类别标签 (n_samples,)
+    :param num_classes: 类别总数
+    :param le: LabelEncoder 对象
     :param title: 图片标题
-    :param FIG_SAVE_VALID: 图片保存使能
-    :param FIG_SAVE_PATH: 图片保存路径
-
-    :return: None
+    :param FIG_SAVE_VALID: bool
+    :param FIG_SAVE_PATH: 保存目录
+    :param condition_labels: 工况标签 (n_samples,)，若为 None 则仅按故障着色
     """
-    # PCA
+    from sklearn.decomposition import PCA
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import os
+    from sklearn.preprocessing import StandardScaler
+
+    # 特征标准化（PCA 对尺度敏感）
+    scaler = StandardScaler()
+    X_feat_norm = scaler.fit_transform(X_feat)
+
     pca = PCA(n_components=2, random_state=42)
-    X_pca = pca.fit_transform(X_feat)
-    plt.figure(figsize=(10, 8))
-    for i in range(num_classes):
-        plt.scatter(X_pca[y_true == i, 0], X_pca[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
+    X_pca = pca.fit_transform(X_feat_norm)
+
+    plt.figure(figsize=(12, 10))
+    base_colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', 'h', '+']
+
+    if condition_labels is not None:
+        unique_conds = np.unique(condition_labels)
+        cond_to_marker = {cond: markers[i % len(markers)] for i, cond in enumerate(unique_conds)}
+
+        for i in range(num_classes):
+            class_mask = (y_true == i)
+            for cond in unique_conds:
+                mask = class_mask & (condition_labels == cond)
+                if np.sum(mask) > 0:
+                    plt.scatter(
+                        X_pca[mask, 0], X_pca[mask, 1],
+                        label=f'{le.classes_[i]}_{cond}',
+                        s=25, alpha=0.7,
+                        color=base_colors[i % len(base_colors)],
+                        marker=cond_to_marker[cond]
+                    )
+    else:
+        for i in range(num_classes):
+            plt.scatter(
+                X_pca[y_true == i, 0], X_pca[y_true == i, 1],
+                label=le.classes_[i],
+                s=20, alpha=0.7,
+                color=base_colors[i % len(base_colors)]
+            )
+
     plt.legend(prop={'family': 'Times New Roman', 'size': 16})
     plt.title(label=title, fontsize=16, fontfamily="Times New Roman")
-    plt.xlabel('Component 1', fontsize=16, fontfamily="Times New Roman")
-    plt.tick_params(axis='both', labelsize=16)
+    plt.xlabel('Principal Component 1', fontsize=14)
+    plt.ylabel('Principal Component 2', fontsize=14)
+    plt.tick_params(axis='both', labelsize=14)
+    plt.grid(True, linestyle='--', alpha=0.3)
 
-    if FIG_SAVE_VALID:
-        if FIG_SAVE_PATH:
-            filename = f"{title}.png"
-            img_save_path = os.path.join(FIG_SAVE_PATH, filename)
-            plt.savefig(img_save_path, dpi=600, bbox_inches='tight')
+    if FIG_SAVE_VALID and FIG_SAVE_PATH:
+        filename = f"{title}.png"
+        img_save_path = os.path.join(FIG_SAVE_PATH, filename)
+        plt.savefig(img_save_path, dpi=600, bbox_inches='tight')
 
     plt.show(block=False)
 
-def tSNE_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH):
+def tSNE_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH, condition_labels=None):
     """
-    绘制t-SNE结果
+    绘制t-SNE结果，支持可选工况标签
 
-    :param X_feat: 模型提取的样本特征
-    :param y_true: 样本对应的标签
-    :param num_classes: 数据集中类别种类，在数据预处理中得到
-    :param device: 训练硬件，cuda或cpu
-    :param le: preprocess_data()返回的数据集编码
+    :param X_feat: 特征矩阵 (n_samples, feature_dim)
+    :param y_true: 故障类别标签 (n_samples,)
+    :param num_classes: 类别总数
+    :param le: LabelEncoder 对象
     :param title: 图片标题
-    :param FIG_SAVE_VALID: 图片保存使能
-    :param FIG_SAVE_PATH: 图片保存路径
-
-    :return: None
+    :param FIG_SAVE_VALID: bool
+    :param FIG_SAVE_PATH: 保存目录
+    :param condition_labels: 工况标签 (n_samples,)，若为 None 则仅按故障着色
     """
-    tsne = TSNE(n_components=2, perplexity=30, random_state=42)
-    X_tsne = tsne.fit_transform(X_feat)
-    plt.figure(figsize=(10, 8))
-    for i in range(num_classes):
-        plt.scatter(X_tsne[y_true == i, 0], X_tsne[y_true == i, 1], label=le.classes_[i], s=20, alpha=0.7)
+    from sklearn.manifold import TSNE
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import os
+    from sklearn.preprocessing import StandardScaler
+
+    # t-SNE 对尺度敏感，建议标准化
+    scaler = StandardScaler()
+    X_feat_norm = scaler.fit_transform(X_feat)
+
+    # 如果样本量很大，可考虑随机采样加速，这里保持全量
+    tsne = TSNE(n_components=2, perplexity=30, random_state=42, init='pca')
+    X_tsne = tsne.fit_transform(X_feat_norm)
+
+    plt.figure(figsize=(12, 10))
+    base_colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', 'h', '+']
+
+    if condition_labels is not None:
+        unique_conds = np.unique(condition_labels)
+        cond_to_marker = {cond: markers[i % len(markers)] for i, cond in enumerate(unique_conds)}
+
+        for i in range(num_classes):
+            class_mask = (y_true == i)
+            for cond in unique_conds:
+                mask = class_mask & (condition_labels == cond)
+                if np.sum(mask) > 0:
+                    plt.scatter(
+                        X_tsne[mask, 0], X_tsne[mask, 1],
+                        label=f'{le.classes_[i]}_{cond}',
+                        s=25, alpha=0.7,
+                        color=base_colors[i % len(base_colors)],
+                        marker=cond_to_marker[cond]
+                    )
+    else:
+        for i in range(num_classes):
+            plt.scatter(
+                X_tsne[y_true == i, 0], X_tsne[y_true == i, 1],
+                label=le.classes_[i],
+                s=20, alpha=0.7,
+                color=base_colors[i % len(base_colors)]
+            )
+
     plt.legend(prop={'family': 'Times New Roman', 'size': 16})
-    plt.tick_params(axis='both', labelsize=16)
     plt.title(label=title, fontsize=16, fontfamily="Times New Roman")
+    plt.xlabel('t-SNE Dimension 1', fontsize=14)
+    plt.ylabel('t-SNE Dimension 2', fontsize=14)
+    plt.tick_params(axis='both', labelsize=14)
+    plt.grid(True, linestyle='--', alpha=0.3)
 
-    if FIG_SAVE_VALID:
-        if FIG_SAVE_PATH:
-            filename = f"{title}.png"
-            img_save_path = os.path.join(FIG_SAVE_PATH, filename)
-            plt.savefig(img_save_path, dpi=600, bbox_inches='tight')
+    if FIG_SAVE_VALID and FIG_SAVE_PATH:
+        filename = f"{title}.png"
+        img_save_path = os.path.join(FIG_SAVE_PATH, filename)
+        plt.savefig(img_save_path, dpi=600, bbox_inches='tight')
 
     plt.show(block=False)
 
-import umap  # 需要先安装：pip install umap-learn
-
-def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH):
+def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PATH, condition_labels=None):
     """
-    绘制UMAP结果
+    绘制UMAP结果，支持可选工况标签
 
-    :param X_feat: 模型提取的样本特征
-    :param y_true: 样本对应的标签
-    :param num_classes: 数据集中类别种类，在数据预处理中得到
-    :param le: preprocess_data()返回的数据集编码
+    :param X_feat: 特征矩阵 (n_samples, feature_dim)
+    :param y_true: 故障类别标签 (n_samples,)
+    :param num_classes: 类别总数
+    :param le: LabelEncoder 对象，用于获取类别名称
     :param title: 图片标题
-    :param FIG_SAVE_VALID: 图片保存使能
-    :param FIG_SAVE_PATH: 图片保存路径
-
-    :return: None
+    :param FIG_SAVE_VALID: bool，是否保存图片
+    :param FIG_SAVE_PATH: 保存目录
+    :param condition_labels: 工况标签 (n_samples,)，若为 None 则仅按故障着色（默认）
     """
-    # UMAP 降维
-    reducer = umap.UMAP(
-        n_components=2,
-        n_neighbors=15,
-        min_dist=0.1,
-        random_state=42
-    )
-    X_umap = reducer.fit_transform(X_feat)
+    import umap
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import os
+    from sklearn.preprocessing import StandardScaler
 
-    # 绘图
-    plt.figure(figsize=(10, 8))
-    for i in range(num_classes):
-        plt.scatter(
-            X_umap[y_true == i, 0],
-            X_umap[y_true == i, 1],
-            label=le.classes_[i],
-            s=20,
-            alpha=0.7
-        )
+    # ----- 可选：特征标准化（提升可视化效果） -----
+    scaler = StandardScaler()
+    X_feat_norm = scaler.fit_transform(X_feat)
+
+    # ----- UMAP 降维 -----
+    reducer = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1, random_state=42)
+    X_umap = reducer.fit_transform(X_feat_norm)
+
+    # ----- 绘图 -----
+    plt.figure(figsize=(12, 10))
+    base_colors = ['blue', 'orange', 'green', 'red', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    markers = ['o', 's', '^', 'D', 'v', 'P', '*', 'X', 'h', '+']
+
+    # ---- 判断是否传入工况标签 ----
+    if condition_labels is not None:
+        # 按 (故障 + 工况) 分别着色
+        unique_conds = np.unique(condition_labels)
+        cond_to_marker = {cond: markers[i % len(markers)] for i, cond in enumerate(unique_conds)}
+
+        for i in range(num_classes):
+            class_mask = (y_true == i)
+            for cond in unique_conds:
+                mask = class_mask & (condition_labels == cond)
+                if np.sum(mask) > 0:
+                    plt.scatter(
+                        X_umap[mask, 0], X_umap[mask, 1],
+                        label=f'{le.classes_[i]}_{cond}',
+                        s=25, alpha=0.7,
+                        color=base_colors[i % len(base_colors)],
+                        marker=cond_to_marker[cond]
+                    )
+    else:
+        # 仅按故障类别着色（原始模式）
+        for i in range(num_classes):
+            plt.scatter(
+                X_umap[y_true == i, 0], X_umap[y_true == i, 1],
+                label=le.classes_[i],
+                s=20, alpha=0.7,
+                color=base_colors[i % len(base_colors)]
+            )
+
     plt.legend(prop={'family': 'Times New Roman', 'size': 16})
-    plt.title(label=title, fontsize=16, fontfamily="Times New Roman")  # 可根据模型类型修改标题
-    plt.tick_params(axis='both', labelsize=16)
+    plt.title(label=title, fontsize=16, fontfamily="Times New Roman")
+    plt.tick_params(axis='both', labelsize=14)
+    plt.grid(True, linestyle='--', alpha=0.3)
 
-    if FIG_SAVE_VALID:
-        if FIG_SAVE_PATH:
-            filename = f"{title}.png"
-            img_save_path = os.path.join(FIG_SAVE_PATH, filename)
-            plt.savefig(img_save_path, dpi=600, bbox_inches='tight')
+    if FIG_SAVE_VALID and FIG_SAVE_PATH:
+        filename = f"{title}.png"
+        img_save_path = os.path.join(FIG_SAVE_PATH, filename)
+        plt.savefig(img_save_path, dpi=600, bbox_inches='tight')
 
     plt.show(block=False)
+    plt.pause(0.1)
 
 def unify_label(label):
     """
