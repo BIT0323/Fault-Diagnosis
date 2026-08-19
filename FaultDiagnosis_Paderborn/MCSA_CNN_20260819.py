@@ -1,4 +1,5 @@
 # Copyright Xie Fangyuan, Beijing Institute of technology. All rights reserved
+from tabnanny import verbose
 
 import torch
 import torch.nn as nn
@@ -43,7 +44,7 @@ rand_seed=28
 rcParams['agg.path.chunksize'] = 20000
 
 
-# 测试数据集加载
+# 数据集加载
 BEARING_SELECT = ['K001', 'KA04', 'KI04']
 all_data = {}
 for folder in BEARING_SELECT:
@@ -73,12 +74,11 @@ train_loader, test_loader, num_channels, num_classes, class_names = utils.prepar
     all_data,
     signal_names=['vibration_1', 'phase_current_1'],
     sample_length=512,
-    step=256,
     test_size=1,
     batch_size=batch_size,
     random_seed=rand_seed,
-    normalize=False
+    normalize=False,
+    train_bearing_codes=['K001', 'KA04'],
+    test_bearing_codes=['KI04'],
+    verbose=True
 )
-
-print(f"通道数: {num_channels}, 类别数: {num_classes}, 类别名称: {class_names}")
-print(f"训练批次数: {len(train_loader)}, 测试批次数: {len(test_loader)}")

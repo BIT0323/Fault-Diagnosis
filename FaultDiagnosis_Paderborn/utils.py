@@ -186,7 +186,7 @@ def load_paderborn_dataset(
         except Exception as e:
             print(f"加载文件 {file_path.name} 失败: {e}")
 
-    print(f"成功加载 {len(data_dict)} 个文件")
+#    print(f"成功加载 {len(data_dict)} 个文件")
     return data_dict
 
 def parse_paderborn_filename(filename):
@@ -211,23 +211,29 @@ def prepare_paderborn_multichannel_dataloaders(
     signal_names,
     sample_length=512,
     step=None,
-    test_size=0.2,
     batch_size=64,
+    normalize=True,
+    train_bearing_codes=None,
+    test_bearing_codes=None,
+    test_size=0.2,
     random_seed=42,
-    normalize=True
+    verbose=True
 ):
     """
-    按文件划分训练/测试集（避免同一文件的样本泄漏到两个集合中）
+    按文件划分训练/测试集，支持指定轴承代码
 
     参数:
-        all_data: dict, 由 load_paderborn_dataset 返回，键为文件名，值为信号字典
-        signal_names: list, 要使用的信号名称列表，如 ['vibration_1', 'phase_current_1']
+        all_data: dict, 由 load_paderborn_dataset 返回
+        signal_names: list, 信号名称列表，如 ['vibration_1', 'phase_current_1']
         sample_length: 每个样本的时间点数
-        step: 滑动步长，若为 None 则无重叠 (step=sample_length)
-        test_size: 测试集比例
+        step: 滑动步长，若为 None 则无重叠
         batch_size: 批次大小
-        random_seed: 随机种子
-        normalize: 是否对每个通道分别进行 Z-score 标准化
+        normalize: 是否对每个通道进行 Z-score 标准化
+        train_bearing_codes: list, 训练集轴承代码列表，如 ['K001', 'KA04']
+        test_bearing_codes: list, 测试集轴承代码列表，如 ['KI04']
+        test_size: 当未指定轴承代码时，按比例随机划分（后备方案）
+        random_seed: 随机种子（后备方案用）
+        verbose: bool, 是否打印详细信息（通道数、样本数、类别分布等）
 
     返回:
         train_loader, test_loader, num_channels, num_classes, class_names
@@ -235,62 +241,112 @@ def prepare_paderborn_multichannel_dataloaders(
     if step is None:
         step = sample_length
 
-    # 用于存储所有样本、标签和对应的文件索引
-    X_list = []
-    y_list = []
-    file_id_list = []   # 每个样本对应的文件索引（或文件名）
-    file_labels = []    # 每个文件的标签（用于分层划分）
-
-    # 先收集所有文件及其标签（去除重复文件）
+    # ----- 1. 构建文件标签和轴承代码映射 -----
     file_names = list(all_data.keys())
     file_label_map = {}
+    file_bearing_map = {}
+
     for fname in file_names:
-        # 解析轴承代码
         try:
             info = parse_paderborn_filename(fname)
         except ValueError:
             continue
         bearing_code = info['bearing_code']
-        if bearing_code not in BEARING_LABEL_MAP:
-            continue
-        label = BEARING_LABEL_MAP[bearing_code]
-        file_label_map[fname] = label
+        if bearing_code in BEARING_LABEL_MAP:
+            file_label_map[fname] = BEARING_LABEL_MAP[bearing_code]
+            file_bearing_map[fname] = bearing_code
 
-    # 仅保留有标签的文件
     valid_files = list(file_label_map.keys())
     if len(valid_files) == 0:
         raise RuntimeError("没有找到任何可用的文件，请检查标签映射。")
 
-    # 为每个文件分配一个索引（用于快速映射）
     file_to_idx = {fname: idx for idx, fname in enumerate(valid_files)}
-    file_labels_array = np.array([file_label_map[fname] for fname in valid_files])
 
-    # 遍历所有文件
+    # ----- 2. 根据轴承代码划分文件 -----
+    if train_bearing_codes is not None and test_bearing_codes is not None:
+        train_files = []
+        test_files = []
+        for fname in valid_files:
+            code = file_bearing_map[fname]
+            if code in train_bearing_codes:
+                train_files.append(fname)
+            elif code in test_bearing_codes:
+                test_files.append(fname)
+
+        assigned = set(train_files) | set(test_files)
+        if len(assigned) < len(valid_files):
+            unassigned = set(valid_files) - assigned
+            if verbose:
+                print(f"警告: 以下文件未被分配到训练或测试集，将被忽略: {list(unassigned)[:5]}...")
+
+        if not train_files or not test_files:
+            raise ValueError(
+                f"根据轴承代码未找到足够文件。训练文件数: {len(train_files)}, 测试文件数: {len(test_files)}。"
+                f"请检查 train_bearing_codes={train_bearing_codes}, test_bearing_codes={test_bearing_codes} 是否正确。"
+            )
+
+        train_file_indices = [file_to_idx[f] for f in train_files]
+        test_file_indices = [file_to_idx[f] for f in test_files]
+
+        if verbose:
+            print(f"使用轴承代码划分: 训练轴承 {len(train_bearing_codes)} 个, 测试轴承 {len(test_bearing_codes)} 个")
+            print(f"  训练文件数: {len(train_files)}, 测试文件数: {len(test_files)}")
+
+    else:
+        if verbose:
+            print("未指定轴承代码，使用随机按比例划分（文件级别）...")
+        unique_file_indices = np.arange(len(valid_files))
+        file_labels_for_split = [file_label_map[f] for f in valid_files]
+
+        if isinstance(test_size, int) and test_size >= 1:
+            test_count = test_size
+        elif isinstance(test_size, float):
+            test_count = int(len(valid_files) * test_size)
+        else:
+            raise ValueError("test_size 必须为浮点比例或整数个数")
+
+        if test_count <= 0 or test_count >= len(valid_files):
+            raise ValueError(f"测试集大小 {test_count} 无效，请调整 test_size 或提供更多文件。")
+
+        train_file_indices, test_file_indices = train_test_split(
+            unique_file_indices,
+            test_size=test_count,
+            random_state=random_seed,
+            stratify=file_labels_for_split
+        )
+        if verbose:
+            print(f"随机划分: 训练文件数 {len(train_file_indices)}, 测试文件数 {len(test_file_indices)}")
+
+    # ----- 3. 切分样本 -----
+    X_list = []
+    y_list = []
+    file_ids = []
+
     for fname, sig_dict in all_data.items():
         if fname not in file_to_idx:
-            continue   # 跳过无标签的文件
-
-        # 检查信号
-        missing = [s for s in signal_names if s not in sig_dict]
-        if missing:
-            print(f"警告: 文件 {fname} 缺少信号 {missing}，跳过")
-            continue
-
-        # 检查长度一致性
-        lengths = [len(sig_dict[s]) for s in signal_names]
-        if len(set(lengths)) > 1:
-            print(f"警告: 文件 {fname} 中各信号长度不一致，跳过")
-            continue
-        total_len = lengths[0]
-
-        # 切分样本
-        num_samples = (total_len - sample_length) // step + 1
-        if num_samples <= 0:
-            print(f"警告: 文件 {fname} 信号长度 {total_len} 小于样本长度 {sample_length}，跳过")
             continue
 
         file_idx = file_to_idx[fname]
         label = file_label_map[fname]
+
+        missing = [s for s in signal_names if s not in sig_dict]
+        if missing:
+            if verbose:
+                print(f"警告: 文件 {fname} 缺少信号 {missing}，跳过")
+            continue
+
+        lengths = [len(sig_dict[s]) for s in signal_names]
+        if len(set(lengths)) > 1:
+            if verbose:
+                print(f"警告: 文件 {fname} 中各信号长度不一致，跳过")
+            continue
+
+        total_len = lengths[0]
+        num_samples = (total_len - sample_length) // step + 1
+        if num_samples <= 0:
+            if verbose:
+                print(f"警告: 文件 {fname} 信号长度 {total_len} 小于样本长度 {sample_length}，跳过")
+            continue
 
         for i in range(num_samples):
             start = i * step
@@ -298,36 +354,21 @@ def prepare_paderborn_multichannel_dataloaders(
             for s in signal_names:
                 seg = sig_dict[s][start:start + sample_length]
                 slices.append(seg)
-            multi_channel = np.stack(slices, axis=0)   # (channels, length)
+            multi_channel = np.stack(slices, axis=0)
             X_list.append(multi_channel)
             y_list.append(label)
-            file_id_list.append(file_idx)
+            file_ids.append(file_idx)
 
     if len(X_list) == 0:
         raise RuntimeError("未提取到任何样本。")
 
     X = np.array(X_list, dtype=np.float32)
     y = np.array(y_list, dtype=np.int64)
-    file_ids = np.array(file_id_list, dtype=np.int64)
+    file_ids = np.array(file_ids)
 
-    num_channels = X.shape[1]
-    print(f"总样本数: {X.shape[0]}, 通道数: {num_channels}, 样本长度: {X.shape[2]}, 类别数: {len(np.unique(y))}")
-    print(f"类别分布: {dict(zip(*np.unique(y, return_counts=True)))}")
+    num_channels = X.shape[1]   # 通道数
 
-    # ----- 按文件划分训练集和测试集 -----
-    # 获取唯一的文件索引及其对应的标签
-    unique_file_indices = np.unique(file_ids)
-    file_labels_for_split = [file_label_map[valid_files[idx]] for idx in unique_file_indices]
-
-    # 按文件划分（分层抽样，保证各类别在训练/测试文件中的比例相似）
-    train_file_indices, test_file_indices = train_test_split(
-        unique_file_indices,
-        test_size=test_size,
-        random_state=random_seed,
-        stratify=file_labels_for_split
-    )
-
-    # 根据文件索引筛选样本
+    # 根据文件索引划分
     train_mask = np.isin(file_ids, train_file_indices)
     test_mask = np.isin(file_ids, test_file_indices)
 
@@ -336,13 +377,26 @@ def prepare_paderborn_multichannel_dataloaders(
     X_test = X[test_mask]
     y_test = y[test_mask]
 
-    print(f"训练集样本数: {X_train.shape[0]}, 测试集样本数: {X_test.shape[0]}")
-    print(f"训练集类别分布: {dict(zip(*np.unique(y_train, return_counts=True)))}")
-    print(f"测试集类别分布: {dict(zip(*np.unique(y_test, return_counts=True)))}")
+    # ========== 关键打印输出 ==========
+    if verbose:
+        print("\n" + "="*60)
+        print("数据加载完成 - 信息摘要")
+        print("="*60)
+        print(f"信号通道数 (num_channels): {num_channels}")
+        print(f"  通道名称: {signal_names}")
+        print(f"样本长度 (sample_length): {sample_length}")
+        print(f"滑动步长 (step): {step}")
+        print(f"总样本数: {X.shape[0]}")
+        print(f"训练样本数: {X_train.shape[0]}")
+        print(f"测试样本数: {X_test.shape[0]}")
+        print(f"类别数 (num_classes): {len(np.unique(y))}")
+        print(f"类别名称: {['Healthy', 'Outer_Race', 'Inner_Race'][:len(np.unique(y))]}")
+        print(f"训练集类别分布: {dict(zip(*np.unique(y_train, return_counts=True)))}")
+        print(f"测试集类别分布: {dict(zip(*np.unique(y_test, return_counts=True)))}")
+        print("="*60 + "\n")
 
-    # 标准化（对每个通道独立）
+    # ----- 4. 标准化 -----
     if normalize:
-        # 重塑为 (样本*长度, 通道数)
         train_flat = X_train.transpose(0, 2, 1).reshape(-1, num_channels)
         test_flat = X_test.transpose(0, 2, 1).reshape(-1, num_channels)
         scaler = StandardScaler()
@@ -353,7 +407,7 @@ def prepare_paderborn_multichannel_dataloaders(
         X_train_scaled = X_train
         X_test_scaled = X_test
 
-    # 转为 PyTorch Tensor
+    # ----- 5. 转为 Tensor -----
     X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
     X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
     y_train_tensor = torch.tensor(y_train, dtype=torch.long)
