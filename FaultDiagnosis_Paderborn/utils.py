@@ -212,31 +212,28 @@ def prepare_paderborn_multichannel_dataloaders(
     sample_length=512,
     step=None,
     batch_size=64,
-    normalize=True,
+    normalize='standard',
     train_bearing_codes=None,
     test_bearing_codes=None,
     test_size=0.2,
     random_seed=42,
-    verbose=True
+    verbose=True,
+    extract_handcrafted=False
 ):
     """
-    按文件划分训练/测试集，支持指定轴承代码
+    按文件划分训练/测试集，支持为每个通道独立设置归一化方式
+    若 extract_handcrafted=True，则返回融合 DataLoader（每个 batch 返回 raw, feat, label）
 
     参数:
-        all_data: dict, 由 load_paderborn_dataset 返回
-        signal_names: list, 信号名称列表，如 ['vibration_1', 'phase_current_1']
-        sample_length: 每个样本的时间点数
-        step: 滑动步长，若为 None 则无重叠
-        batch_size: 批次大小
-        normalize: 是否对每个通道进行 Z-score 标准化
-        train_bearing_codes: list, 训练集轴承代码列表，如 ['K001', 'KA04']
-        test_bearing_codes: list, 测试集轴承代码列表，如 ['KI04']
-        test_size: 当未指定轴承代码时，按比例随机划分（后备方案）
-        random_seed: 随机种子（后备方案用）
-        verbose: bool, 是否打印详细信息（通道数、样本数、类别分布等）
+        ... 同上 ...
+        extract_handcrafted: bool, 是否提取手工特征并返回融合 DataLoader
 
     返回:
-        train_loader, test_loader, num_channels, num_classes, class_names
+        当 extract_handcrafted=False 时:
+            train_loader, test_loader, num_channels, num_classes, class_names, None
+        当 extract_handcrafted=True 时:
+            train_loader, test_loader, num_channels, num_classes, class_names, feat_dim
+        其中 train_loader 和 test_loader 的每个 batch 为 (raw, feat, labels)
     """
     if step is None:
         step = sample_length
@@ -354,7 +351,7 @@ def prepare_paderborn_multichannel_dataloaders(
             for s in signal_names:
                 seg = sig_dict[s][start:start + sample_length]
                 slices.append(seg)
-            multi_channel = np.stack(slices, axis=0)
+            multi_channel = np.stack(slices, axis=0)  # (channels, length)
             X_list.append(multi_channel)
             y_list.append(label)
             file_ids.append(file_idx)
@@ -366,7 +363,7 @@ def prepare_paderborn_multichannel_dataloaders(
     y = np.array(y_list, dtype=np.int64)
     file_ids = np.array(file_ids)
 
-    num_channels = X.shape[1]   # 通道数
+    num_channels = X.shape[1]
 
     # 根据文件索引划分
     train_mask = np.isin(file_ids, train_file_indices)
@@ -377,44 +374,137 @@ def prepare_paderborn_multichannel_dataloaders(
     X_test = X[test_mask]
     y_test = y[test_mask]
 
-    # ========== 关键打印输出 ==========
+    # ========== 解析归一化配置 ==========
+    if isinstance(normalize, str):
+        norm_config = [normalize] * num_channels
+    elif isinstance(normalize, list):
+        if len(normalize) != num_channels:
+            raise ValueError(f"normalize 列表长度 ({len(normalize)}) 必须等于通道数 ({num_channels})")
+        norm_config = normalize
+    elif isinstance(normalize, dict):
+        norm_config = []
+        for s in signal_names:
+            if s in normalize:
+                norm_config.append(normalize[s])
+            else:
+                norm_config.append('standard')
+    else:
+        raise TypeError("normalize 必须为字符串、列表或字典")
+
+    # ========== 执行归一化 ==========
+    X_train_scaled = X_train.copy()
+    X_test_scaled = X_test.copy()
+
+    for c in range(num_channels):
+        method = norm_config[c]
+        if method == 'standard':
+            train_flat = X_train[:, c, :].reshape(-1, 1)
+            test_flat = X_test[:, c, :].reshape(-1, 1)
+            scaler = StandardScaler()
+            scaler.fit(train_flat)
+            X_train_scaled[:, c, :] = scaler.transform(train_flat).reshape(X_train.shape[0], -1)
+            X_test_scaled[:, c, :] = scaler.transform(test_flat).reshape(X_test.shape[0], -1)
+        elif method == 'sample':
+            eps = 1e-8
+            for i in range(X_train.shape[0]):
+                sig = X_train[i, c, :]
+                mean = sig.mean()
+                std = sig.std()
+                X_train_scaled[i, c, :] = (sig - mean) / (std + eps)
+            for i in range(X_test.shape[0]):
+                sig = X_test[i, c, :]
+                mean = sig.mean()
+                std = sig.std()
+                X_test_scaled[i, c, :] = (sig - mean) / (std + eps)
+        elif method == 'mean_only':
+            for i in range(X_train.shape[0]):
+                sig = X_train[i, c, :]
+                X_train_scaled[i, c, :] = sig - sig.mean()
+            for i in range(X_test.shape[0]):
+                sig = X_test[i, c, :]
+                X_test_scaled[i, c, :] = sig - sig.mean()
+        elif method == 'minmax':
+            train_flat = X_train[:, c, :].reshape(-1, 1)
+            test_flat = X_test[:, c, :].reshape(-1, 1)
+            min_val = train_flat.min()
+            max_val = train_flat.max()
+            if max_val - min_val < 1e-12:
+                X_train_scaled[:, c, :] = 0
+                X_test_scaled[:, c, :] = 0
+            else:
+                X_train_scaled[:, c, :] = 2 * (X_train[:, c, :] - min_val) / (max_val - min_val) - 1
+                X_test_scaled[:, c, :] = 2 * (X_test[:, c, :] - min_val) / (max_val - min_val) - 1
+        elif method == 'none':
+            pass
+        else:
+            raise ValueError(f"未知的归一化方式: {method}")
+
+    # ========== 打印摘要 ==========
     if verbose:
         print("\n" + "="*60)
         print("数据加载完成 - 信息摘要")
         print("="*60)
+        print(f"归一化配置 (按通道): {dict(zip(signal_names, norm_config))}")
         print(f"信号通道数 (num_channels): {num_channels}")
         print(f"  通道名称: {signal_names}")
         print(f"样本长度 (sample_length): {sample_length}")
         print(f"滑动步长 (step): {step}")
         print(f"总样本数: {X.shape[0]}")
-        print(f"训练样本数: {X_train.shape[0]}")
-        print(f"测试样本数: {X_test.shape[0]}")
+        print(f"训练样本数: {X_train_scaled.shape[0]}")
+        print(f"测试样本数: {X_test_scaled.shape[0]}")
         print(f"类别数 (num_classes): {len(np.unique(y))}")
         print(f"类别名称: {['Healthy', 'Outer_Race', 'Inner_Race'][:len(np.unique(y))]}")
         print(f"训练集类别分布: {dict(zip(*np.unique(y_train, return_counts=True)))}")
         print(f"测试集类别分布: {dict(zip(*np.unique(y_test, return_counts=True)))}")
         print("="*60 + "\n")
 
-    # ----- 4. 标准化 -----
-    if normalize:
-        train_flat = X_train.transpose(0, 2, 1).reshape(-1, num_channels)
-        test_flat = X_test.transpose(0, 2, 1).reshape(-1, num_channels)
-        scaler = StandardScaler()
-        scaler.fit(train_flat)
-        X_train_scaled = scaler.transform(train_flat).reshape(X_train.shape[0], -1, num_channels).transpose(0, 2, 1)
-        X_test_scaled = scaler.transform(test_flat).reshape(X_test.shape[0], -1, num_channels).transpose(0, 2, 1)
-    else:
-        X_train_scaled = X_train
-        X_test_scaled = X_test
+    # ========== 提取手工特征（若需要） ==========
+    feat_dim = None
+    if extract_handcrafted:
+        # 将原始信号转为 (N, L, C) 以适配特征提取函数
+        X_train_for_feat = X_train_scaled.transpose(0, 2, 1)  # (N, L, C)
+        X_test_for_feat = X_test_scaled.transpose(0, 2, 1)
+        X_train_feat = extract_handcrafted_features_from_samples(X_train_for_feat)  # (N, feat_dim)
+        X_test_feat = extract_handcrafted_features_from_samples(X_test_for_feat)
+        # 标准化手工特征
+        scaler_feat = StandardScaler()
+        X_train_feat = scaler_feat.fit_transform(X_train_feat)
+        X_test_feat = scaler_feat.transform(X_test_feat)
+        feat_dim = X_train_feat.shape[1]
 
-    # ----- 5. 转为 Tensor -----
-    X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
-    X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
+        # 转为 Tensor
+        X_train_feat_tensor = torch.tensor(X_train_feat, dtype=torch.float32)
+        X_test_feat_tensor = torch.tensor(X_test_feat, dtype=torch.float32)
+    else:
+        # 占位，不使用
+        X_train_feat_tensor = None
+        X_test_feat_tensor = None
+
+    # ----- 转为 Tensor -----
+    X_train_raw_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)  # (N, C, L)
+    X_test_raw_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
     y_train_tensor = torch.tensor(y_train, dtype=torch.long)
     y_test_tensor = torch.tensor(y_test, dtype=torch.long)
 
-    train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-    test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
+    # ----- 构建 Dataset 和 DataLoader -----
+    if extract_handcrafted:
+        # 融合 Dataset
+        class FusionDataset(torch.utils.data.Dataset):
+            def __init__(self, raw, feat, labels):
+                self.raw = raw
+                self.feat = feat
+                self.labels = labels
+            def __len__(self):
+                return len(self.labels)
+            def __getitem__(self, idx):
+                return self.raw[idx], self.feat[idx], self.labels[idx]
+
+        train_dataset = FusionDataset(X_train_raw_tensor, X_train_feat_tensor, y_train_tensor)
+        test_dataset = FusionDataset(X_test_raw_tensor, X_test_feat_tensor, y_test_tensor)
+    else:
+        # 普通单输入 Dataset
+        train_dataset = TensorDataset(X_train_raw_tensor, y_train_tensor)
+        test_dataset = TensorDataset(X_test_raw_tensor, y_test_tensor)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
@@ -422,7 +512,7 @@ def prepare_paderborn_multichannel_dataloaders(
     num_classes = len(np.unique(y))
     class_names = ['Healthy', 'Outer_Race', 'Inner_Race'][:num_classes]
 
-    return train_loader, test_loader, num_channels, num_classes, class_names
+    return train_loader, test_loader, num_channels, num_classes, class_names, feat_dim
 
 def plot_confusion_matrix(cm, classes,
                           IMG_SAVE,  img_save_path,
@@ -781,7 +871,7 @@ def PCA_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PA
     :param X_feat: 特征矩阵 (n_samples, feature_dim)
     :param y_true: 故障类别标签 (n_samples,)
     :param num_classes: 类别总数
-    :param le: LabelEncoder 对象
+    :param le: 对象名称(class_names)
     :param title: 图片标题
     :param FIG_SAVE_VALID: bool
     :param FIG_SAVE_PATH: 保存目录
@@ -810,7 +900,7 @@ def PCA_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PA
                 if np.sum(mask) > 0:
                     plt.scatter(
                         X_pca[mask, 0], X_pca[mask, 1],
-                        label=f'{le.classes_[i]}_{cond}',
+                        label=f'{le[i]}_{cond}',
                         s=25, alpha=0.7,
                         color=base_colors[i % len(base_colors)],
                         marker=cond_to_marker[cond]
@@ -819,7 +909,7 @@ def PCA_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_PA
         for i in range(num_classes):
             plt.scatter(
                 X_pca[y_true == i, 0], X_pca[y_true == i, 1],
-                label=le.classes_[i],
+                label=le[i],
                 s=20, alpha=0.7,
                 color=base_colors[i % len(base_colors)]
             )
@@ -846,7 +936,7 @@ def PCA_3D_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE
     :param X_feat: 特征矩阵 (n_samples, feature_dim)
     :param y_true: 故障类别标签 (n_samples,)
     :param num_classes: 类别总数
-    :param le: LabelEncoder 对象
+    :param le: 对象名称(class_names)
     :param title: 图片标题
     :param FIG_SAVE_VALID: bool
     :param FIG_SAVE_PATH: 保存目录
@@ -886,7 +976,7 @@ def PCA_3D_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE
                         X_pca[mask, 0],  # PC1
                         X_pca[mask, 1],  # PC2
                         X_pca[mask, 2],  # PC3
-                        label=f'{le.classes_[i]}_{cond}',
+                        label=f'{le[i]}_{cond}',
                         s=30, alpha=0.7,
                         color=base_colors[i % len(base_colors)],
                         marker=cond_to_marker[cond],
@@ -898,7 +988,7 @@ def PCA_3D_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE
                 X_pca[y_true == i, 0],
                 X_pca[y_true == i, 1],
                 X_pca[y_true == i, 2],
-                label=le.classes_[i],
+                label=le[i],
                 s=25, alpha=0.7,
                 color=base_colors[i % len(base_colors)]
             )
@@ -928,7 +1018,7 @@ def tSNE_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
     :param X_feat: 特征矩阵 (n_samples, feature_dim)
     :param y_true: 故障类别标签 (n_samples,)
     :param num_classes: 类别总数
-    :param le: LabelEncoder 对象
+    :param le: 对象名称(class_names)
     :param title: 图片标题
     :param FIG_SAVE_VALID: bool
     :param FIG_SAVE_PATH: 保存目录
@@ -958,7 +1048,7 @@ def tSNE_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
                 if np.sum(mask) > 0:
                     plt.scatter(
                         X_tsne[mask, 0], X_tsne[mask, 1],
-                        label=f'{le.classes_[i]}_{cond}',
+                        label=f'{le[i]}_{cond}',
                         s=25, alpha=0.7,
                         color=base_colors[i % len(base_colors)],
                         marker=cond_to_marker[cond]
@@ -967,7 +1057,7 @@ def tSNE_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
         for i in range(num_classes):
             plt.scatter(
                 X_tsne[y_true == i, 0], X_tsne[y_true == i, 1],
-                label=le.classes_[i],
+                label=le[i],
                 s=20, alpha=0.7,
                 color=base_colors[i % len(base_colors)]
             )
@@ -993,7 +1083,7 @@ def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
     :param X_feat: 特征矩阵 (n_samples, feature_dim)
     :param y_true: 故障类别标签 (n_samples,)
     :param num_classes: 类别总数
-    :param le: LabelEncoder 对象，用于获取类别名称
+    :param le: 对象名称(class_names)
     :param title: 图片标题
     :param FIG_SAVE_VALID: bool，是否保存图片
     :param FIG_SAVE_PATH: 保存目录
@@ -1026,7 +1116,7 @@ def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
                 if np.sum(mask) > 0:
                     plt.scatter(
                         X_umap[mask, 0], X_umap[mask, 1],
-                        label=f'{le.classes_[i]}_{cond}',
+                        label=f'{le[i]}_{cond}',
                         s=25, alpha=0.7,
                         color=base_colors[i % len(base_colors)],
                         marker=cond_to_marker[cond]
@@ -1036,7 +1126,7 @@ def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
         for i in range(num_classes):
             plt.scatter(
                 X_umap[y_true == i, 0], X_umap[y_true == i, 1],
-                label=le.classes_[i],
+                label=le[i],
                 s=20, alpha=0.7,
                 color=base_colors[i % len(base_colors)]
             )
@@ -1053,16 +1143,6 @@ def UMAP_plot(X_feat, y_true, num_classes, le, title, FIG_SAVE_VALID, FIG_SAVE_P
 
     plt.show(block=False)
     plt.pause(0.1)
-
-def unify_label(label):
-    """
-
-    :param label: 加载的数据集标签
-    :return: 返回统一的去掉工况后缀的标签
-    """
-    # 示例规则：取下划线前的部分，即 'Chipped_20L0' -> 'Chipped'
-    # 根据你实际的命名规则调整
-    return label.split('_')[0] if '_' in label else label
 
 def plt_time_domain(arr, fs=1600, ylabel='Amp($m/s^2$)', title='原始数据时域图', img_save_path=None, x_vline=None,
                     y_hline=None):
