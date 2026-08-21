@@ -40,20 +40,11 @@ TimeFrequencyAnalysisVisualization = False # 是否进行时频域可视化图�
 fs=5120
 rand_seed=28
 rcParams['agg.path.chunksize'] = 20000
-# ========== 噪声配置 ==========
-NOISE_ENHANCE_VALID = False # 噪声增强训练使能位，True-开启噪声增强；False-关闭噪声增强
-use_fixed_noise = False  # 设为 True 则使用固定噪声，False 则随机
-# 固定噪声参数（当 use_fixed_noise=True 时生效）
-fixed_noise_config = {
-    'noise_type': 'all',          # 可选 'gaussian', 'impulse', 'harmonic', 'all'
-    'gaussian_kw': {'snr_db': 20, 'RANDOM_SEED': 42},
-    'impulse_kw': {'impulse_prob': 0.01, 'amplitude_scale': 0.5, 'RANDOM_SEED': 42},
-    'harmonic_kw': {'freqs': [30, 90], 'amp_ratio': 0.2, 'fs': fs, 'RANDOM_SEED': 42}
-}
-noise_prob = 0.5
+RANDOM_VALID = True # 非跨工况验证，即比例划分 True-进行非跨轴承验证，存在数据泄露；False-进行跨轴承验证，不存在数据泄露
+RANDOM_CWC_VALID = True # 非跨轴承验证下（比例划分下），测试集是否跨轴承（同分布样本是否出现在模型训练及测试中），True-测试集跨轴承，非同分布单独验证；False-测试集比例划分，同分布样本
 
 # 数据集加载
-BEARING_SELECT = ['K002', 'KA01', 'KA05', 'KI01', 'KI05', 'K001', 'KA22', 'KI14']
+BEARING_SELECT = ['K002', 'KA01', 'KA05', 'KI01', 'KI05', 'K001', 'KA22', 'KI14', 'K003', 'KA06', 'KI07']
 all_data = {}
 for folder in BEARING_SELECT:
     DATA_PATH = os.path.join(DATASET_FOLDER_PATH, f"{folder}\\{folder}")
@@ -62,34 +53,36 @@ for folder in BEARING_SELECT:
     data = utils.load_paderborn_dataset(DATA_PATH)
     all_data.update(data)
 
-# print("加载的文件列表:", list(all_data.keys()))
-# first_key = list(all_data.keys())[0]
-# vib = all_data[first_key].get('vibration_1')
-# if vib is not None:
-#     print(f"振动信号前10个点: {vib[:10]}")
-# else:
-#     print("该文件中未找到 vibration_1 信号")
-#
-# phase_cur = all_data[first_key].get('phase_current_1')
-# if vib is not None:
-#     print(f"相电流信号前10个点: {phase_cur[:10]}")
-# else:
-#     print("该文件中未找到 phase_current_1 信号")
-
-normalize_config = ['sample', 'mean_only']   # 顺序对应 vibration_1, phase_current_1
-
-train_loader, test_loader, num_channels, num_classes, class_names, feat_dim = utils.prepare_paderborn_multichannel_dataloaders(
-    all_data,
-    signal_names=['vibration_1', 'phase_current_1'],
-    sample_length=512,
-    step=512,
-    batch_size=batch_size,
-    normalize={'vibration_1': 'sample', 'phase_current_1': 'mean_only'},  # 示例
-    train_bearing_codes=['K002', 'KA01', 'KA05', 'KI01', 'KI05'],
-    test_bearing_codes=['K001', 'KA22', 'KI14'],
-    verbose=True,
-    extract_handcrafted=True   # 开启融合
-)
+if not RANDOM_VALID:
+    train_loader, test_loader, num_channels, num_classes, class_names, feat_dim = utils.prepare_paderborn_multichannel_dataloaders(
+        all_data,
+        signal_names=['vibration_1', 'phase_current_1'],
+        sample_length=512,
+        step=512,
+        batch_size=batch_size,
+        normalize={'vibration_1': 'sample', 'phase_current_1': 'mean_only'},  # 示例
+        train_bearing_codes=['K002', 'KA01', 'KA05', 'KI01', 'KI05'],
+        test_bearing_codes=['K001', 'KA22', 'KI14'],
+        test_size=None,
+        random_seed=rand_seed,
+        verbose=True,
+        extract_handcrafted=True   # 开启融合
+    )
+else:
+    train_loader, test_loader, num_channels, num_classes, class_names, feat_dim = utils.prepare_paderborn_multichannel_dataloaders(
+        all_data,
+        signal_names=['vibration_1', 'phase_current_1'],
+        sample_length=512,
+        step=512,
+        batch_size=batch_size,
+        normalize={'vibration_1': 'sample', 'phase_current_1': 'mean_only'},  # 保持不变
+        train_bearing_codes=None,        # 关键：不指定轴承代码
+        test_bearing_codes=None,         # 关键：不指定轴承代码
+        test_size=0.2,                   # 测试集比例 20%
+        random_seed=rand_seed,                  # 随机种子，保证可复现
+        verbose=True,
+        extract_handcrafted=True
+    )
 Feature_Dimension = num_channels
 
 # ========================= 定义双分支模型 =========================
@@ -167,7 +160,7 @@ optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
 # ========== 训练或加载已有模型 ==========
-model_path = os.path.join(MODEL_SAVEDIT_PATH, "CNN_20260820BEST.pth")
+model_path = os.path.join(MODEL_SAVEDIT_PATH, "CNN_20260820Random.pth")
 
 train_losses, train_accs = [], []
 test_losses, test_accs = [], []
@@ -204,7 +197,7 @@ if not os.path.exists(model_path):
         train_acc = 100.0 * correct / total
         train_losses.append(train_loss)
         train_accs.append(train_acc)
-        print(f"Epoch {epoch+1}/{num_epochs} | Test Loss: {train_loss:.4f} | Test Acc: {train_acc:.2f}%")
+        print(f"Epoch {epoch+1}/{num_epochs} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%")
 
         # ---------- 测试 ----------
         test_loss, test_acc, _, _ = utils.evaluate_model(
@@ -239,13 +232,29 @@ model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
 print(f"加载最佳模型进行测试: {model_path}")
 
+if RANDOM_CWC_VALID:
+    # =====================非跨轴承训练下的跨工况验证=================================
+    _, test_loader,_,_,_,_= utils.prepare_paderborn_multichannel_dataloaders(
+        all_data,
+        signal_names=['vibration_1', 'phase_current_1'],
+        sample_length=512,
+        step=512,
+        batch_size=batch_size,
+        normalize={'vibration_1': 'sample', 'phase_current_1': 'mean_only'},  # 保持不变
+        train_bearing_codes=['K002', 'KA01', 'KA05', 'KI01', 'KI05'], # 没有实际使用
+        test_bearing_codes=['K003', 'KA06', 'KI07'],
+        test_size=None,
+        random_seed=rand_seed,                  # 随机种子，保证可复现
+        verbose=True,
+        extract_handcrafted=True
+    )
+
 test_loss, test_acc, y_true, y_pre = utils.evaluate_model(
-    model, test_loader, device, criterion, verbose=True, multi_input=True
-)
+    model, test_loader, device, criterion, verbose=True, multi_input=True)
 print(f"最终测试准确率: {test_acc:.2f}%")
 
 # ========== 混淆矩阵与指标 ==========
-FIG_SAVE_PATH = os.path.join(IMG_SAVE_PATH, 'Figure')
+FIG_SAVE_PATH = os.path.join(IMG_SAVE_PATH, 'FigureRandom_CWC')
 os.makedirs(FIG_SAVE_PATH, exist_ok=True)
 
 cm = confusion_matrix(y_true, y_pre, labels=range(num_classes))
@@ -270,45 +279,45 @@ if train_losses and test_losses:
 else:
     print("本次直接加载已有模型，跳过训练曲线绘制。")
 
-# # 特征提取
-# X_feat, y_true = utils.extract_features_CNN(model=model, data_loader=test_loader, device=device)
-# #绘制PCA
-# utils.PCA_plot(
-#     X_feat=X_feat,
-#     y_true=y_true,
-#     num_classes=num_classes,
-#     le=class_names,
-#     title=f"PCA",
-#     FIG_SAVE_VALID=1,
-#     FIG_SAVE_PATH=FIG_SAVE_PATH,
-# )
-# #绘制PCA三主成分可视化
-# utils.PCA_3D_plot(
-#     X_feat, y_true, num_classes,
-#     le=class_names,
-#     title=f'PCA_3D',
-#     FIG_SAVE_VALID=True,
-#     FIG_SAVE_PATH=FIG_SAVE_PATH,
-# )
-#
-# # 绘制t-SNE
-# utils.tSNE_plot(
-#     X_feat=X_feat,
-#     y_true=y_true,
-#     num_classes=num_classes,
-#     le=class_names,
-#     title=f"t-SNE",
-#     FIG_SAVE_VALID=1,
-#     FIG_SAVE_PATH=FIG_SAVE_PATH,
-# )
-# # 绘制UMAP
-# utils.UMAP_plot(
-#     X_feat=X_feat,
-#     y_true=y_true,
-#     num_classes=num_classes,
-#     le=class_names,
-#     title=f"UMAP",
-#     FIG_SAVE_VALID=True,
-#     FIG_SAVE_PATH=FIG_SAVE_PATH,
-# )
-# plt.show()
+# 特征提取
+X_feat, y_true = utils.extract_features_CNN_Fusion(model=model, data_loader=test_loader, device=device)
+#绘制PCA
+utils.PCA_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=class_names,
+    title=f"PCA",
+    FIG_SAVE_VALID=1,
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+)
+#绘制PCA三主成分可视化
+utils.PCA_3D_plot(
+    X_feat, y_true, num_classes,
+    le=class_names,
+    title=f'PCA_3D',
+    FIG_SAVE_VALID=True,
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+)
+
+# 绘制t-SNE
+utils.tSNE_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=class_names,
+    title=f"t-SNE",
+    FIG_SAVE_VALID=1,
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+)
+# 绘制UMAP
+utils.UMAP_plot(
+    X_feat=X_feat,
+    y_true=y_true,
+    num_classes=num_classes,
+    le=class_names,
+    title=f"UMAP",
+    FIG_SAVE_VALID=True,
+    FIG_SAVE_PATH=FIG_SAVE_PATH,
+)
+plt.show()
